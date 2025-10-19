@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth; // <-- 1. AÑADIDO
 use Illuminate\Support\Facades\Validator;
 
 class RegisterController extends Controller
@@ -34,17 +35,32 @@ class RegisterController extends Controller
             DB::beginTransaction();
 
             $data['password'] = bcrypt($data['password']);
-            User::create($data);
+            User::create($data); // <-- Usuario creado
 
             DB::commit();
 
-            return response()->json(['message' => 'Usuario registrado con éxito'], 201);
+            // --- 2. LÓGICA AÑADIDA ---
+            // Intenta iniciar sesión con los datos originales (antes del hash)
+            $credentials = $request->only('email', 'password');
+            
+            // Asumiendo que usas el guard 'api' (típico con JWT/Sanctum)
+            if (! $token = auth('api')->attempt($credentials)) {
+                // Si el login falla por alguna razón
+                return response()->json(['error' => 'No autorizado después del registro'], 401);
+            }
+
+            // 3. Devolver el token que el frontend espera
+            return response()->json([
+                'access_token' => $token,
+                'token_type' => 'bearer',
+                'expires_in' => auth('api')->factory()->getTTL() * 60 
+            ], 201); // 201 Creado (y logueado)
+            
         } catch (\Throwable $th) {
             DB::rollBack();
 
-            return response()->json(['error' => 'Error al registrar el usuario'], 500);
+            // Devuelve el mensaje de error real para depuración
+            return response()->json(['error' => 'Error al registrar el usuario', 'details' => $th->getMessage()], 500);
         }
-
-       
     }
 }
