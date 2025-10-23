@@ -4,6 +4,9 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\RegisterController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\PermissionController;
+use App\Http\Controllers\CurrencyController;
+use App\Http\Controllers\PlatformController;
+use App\Http\Controllers\RequestTypeController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -44,4 +47,44 @@ Route::group([
     Route::put('/{id}', [UserController::class, 'update']);
     Route::delete('/{id}', [UserController::class, 'destroy']);
     Route::patch('/{id}/status', [UserController::class, 'changeStatus']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'currencies'
+], function () {
+    Route::get('/', [CurrencyController::class, 'index']);
+    Route::post('/', [CurrencyController::class, 'store']);
+    Route::put('/{id}', [CurrencyController::class, 'update']);
+    Route::delete('/{id}', [CurrencyController::class, 'destroy']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'platforms'
+], function () {
+    Route::get('/', [PlatformController::class, 'index']);
+    Route::post('/', [PlatformController::class, 'store']);
+    Route::put('/{id}', [PlatformController::class, 'update']);
+    Route::delete('/{id}', [PlatformController::class, 'destroy']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'request-types'
+], function () {
+    Route::get('/', [RequestTypeController::class, 'index']);
+    Route::post('/', [RequestTypeController::class, 'store']);
+    Route::put('/{id}', [RequestTypeController::class, 'update']);
+    Route::delete('/{id}', [RequestTypeController::class, 'destroy']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'exchange-rates'
+], function () {
+    Route::get('/', [ExchangeRateController::class, 'index']);
+    Route::post('/', [ExchangeRateController::class, 'store']);
+    Route::put('/{id}', [ExchangeRateController::class, 'update']);
+    Route::delete('/{id}', [ExchangeRateController::class, 'destroy']);
 });
