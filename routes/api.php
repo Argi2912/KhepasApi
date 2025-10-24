@@ -17,6 +17,7 @@ Route::group([
     Route::get('/', [PermissionController::class, 'index']);
     Route::post('/', [PermissionController::class, 'createPermission']);
     Route::post('/role', [PermissionController::class, 'createRole']);
+    Route::put('/role/{id}', [PermissionController::class, 'updateRole']);
     Route::post('/role-permissions', [PermissionController::class, 'assignRolePermissions']);
     Route::post('/user-roles', [PermissionController::class, 'assignUserRoles']);
     Route::post('/user-permissions', [PermissionController::class, 'assignUserDirectPermissions']);

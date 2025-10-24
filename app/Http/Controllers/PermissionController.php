@@ -56,7 +56,6 @@ class PermissionController extends Controller
         ], 201); 
     }
 
-   
     public function assignRolePermissions(Request $request)
     {
         $request->validate([
@@ -73,6 +72,21 @@ class PermissionController extends Controller
             'role' => $role->load('permissions')
         ]);
     }
+ 
+    public function updateRole(Request $request, $id)
+{
+    try {
+        $role = Role::findOrFail($id);
+        $role->update([
+            'name' => $request->name,
+            'guard_name' => $request->guard_name ?? 'web',
+        ]);
+
+        return response()->json($role, 200);
+    } catch (\Exception $e) {
+        return response()->json(['message' => 'Error al actualizar el rol', 'error' => $e->getMessage()], 500);
+    }
+}
 
    
     public function assignUserRoles(Request $request)
