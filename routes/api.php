@@ -1,10 +1,12 @@
 <?php
 
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CurrenciesController;
 use App\Http\Controllers\RegisterController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\PermissionController;
 use App\Http\Controllers\CurrencyController;
+use App\Http\Controllers\ExchangeRateController;
 use App\Http\Controllers\PlatformController;
 use App\Http\Controllers\RequestTypeController;
 use Illuminate\Http\Request;
@@ -54,10 +56,10 @@ Route::group([
     'middleware' => 'api',
     'prefix' => 'currencies'
 ], function () {
-    Route::get('/', [CurrencyController::class, 'index']);
-    Route::post('/', [CurrencyController::class, 'store']);
-    Route::put('/{id}', [CurrencyController::class, 'update']);
-    Route::delete('/{id}', [CurrencyController::class, 'destroy']);
+    Route::get('/', [CurrenciesController::class, 'index']);
+    Route::post('/', [CurrenciesController::class, 'store']);
+    Route::put('/{id}', [CurrenciesController::class, 'update']);
+    Route::delete('/{id}', [CurrenciesController::class, 'destroy']);
 });
 
 Route::group([

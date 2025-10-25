@@ -46,11 +46,13 @@ class RequestTypeController extends Controller
                 'name' => $request->name,
             ]);
 
+            DB::commit();
+
+
             return response()->json([
                 'message' => 'Tipo de solicitud creado con exito',
                 'data' => $requestType
             ], 201);
-            DB::commit();
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -86,12 +88,12 @@ class RequestTypeController extends Controller
             $requestType->update([
                 'name' => $request->name,
             ]);
+            DB::commit();
 
             return response()->json([
                 'message' => 'Tipo de solicitud actualizado con exito',
                 'data' => $requestType
             ], 200);
-            DB::commit();
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
@@ -111,10 +113,11 @@ class RequestTypeController extends Controller
         try {
             DB::beginTransaction();
             $requestType->delete();
+            DB::commit();
+
             return response()->json([
                 "message" => "Tipo de solicitud eliminado con exito"
             ], 200);
-            DB::commit();
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
