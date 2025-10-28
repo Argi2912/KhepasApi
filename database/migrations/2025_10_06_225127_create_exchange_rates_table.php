@@ -15,8 +15,15 @@ return new class extends Migration
     {
         Schema::create('exchange_rates', function (Blueprint $table) {
             $table->id();
-            $table->string('name');
-            $table->decimal('value', 18,5);
+    
+            $table->unsignedBigInteger('from_currency_id');
+            $table->foreign('from_currency_id')->references('id')->on('currencies');
+
+            $table->unsignedBigInteger('to_currency_id');
+            $table->foreign('to_currency_id')->references('id')->on('currencies');
+
+            $table->decimal('rate', 18, 8); 
+
             $table->timestamps();
         });
     }

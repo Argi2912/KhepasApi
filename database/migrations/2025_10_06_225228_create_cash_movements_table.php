@@ -15,13 +15,14 @@ return new class extends Migration
     {
         Schema::create('cash_movements', function (Blueprint $table) {
             $table->id();
-            $table->decimal('amount',18, 5);
+            $table->decimal('amount', 18, 5);
             $table->text("description");
-            $table->integer('request_num');
             $table->unsignedBigInteger('user_id');
             $table->foreign('user_id')->references('id')->on('users');
-            $table->unsignedBigInteger("requests_type_id");
-            $table->foreign('requests_type_id')->references('id')->on('requests');
+
+            $table->unsignedBigInteger('request_id');
+            $table->foreign('request_id')->references('id')->on('requests');
+
             $table->unsignedBigInteger("currency_id");
             $table->foreign('currency_id')->references('id')->on('currencies');
             $table->unsignedBigInteger('platform_id');
