@@ -9,6 +9,11 @@ use App\Http\Controllers\CurrencyController;
 use App\Http\Controllers\ExchangeRateController;
 use App\Http\Controllers\PlatformController;
 use App\Http\Controllers\RequestTypeController;
+use App\Http\Controllers\ClientController;
+use App\Http\Controllers\ProviderController;
+use App\Http\Controllers\CorredorController;
+use App\Http\Controllers\AdminController;
+use App\Http\Controllers\SolicitudController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -90,4 +95,51 @@ Route::group([
     Route::post('/', [ExchangeRateController::class, 'store']);
     Route::put('/{id}', [ExchangeRateController::class, 'update']);
     Route::delete('/{id}', [ExchangeRateController::class, 'destroy']);
+});
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'solicitudes'
+], function () {
+    Route::get('/', [SolicitudController::class, 'index']);
+    Route::post('/', [SolicitudController::class, 'store']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'clients'
+], function () {
+    Route::get('/', [ClientController::class, 'index']);
+    Route::post('/', [ClientController::class, 'store']);
+    Route::put('/{id}', [ClientController::class, 'update']);
+    Route::delete('/{id}', [ClientController::class, 'destroy']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'providers'
+], function () {
+    Route::get('/', [ProviderController::class, 'index']);
+    Route::post('/', [ProviderController::class, 'store']);
+    Route::put('/{id}', [ProviderController::class, 'update']);
+    Route::delete('/{id}', [ProviderController::class, 'destroy']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'corredores'
+], function () {
+    Route::get('/', [CorredorController::class, 'index']);
+    Route::post('/', [CorredorController::class, 'store']);
+    Route::put('/{id}', [CorredorController::class, 'update']);
+    Route::delete('/{id}', [CorredorController::class, 'destroy']);
+});
+
+Route::group([
+    'middleware' => 'api',
+    'prefix' => 'admins'
+], function () {
+    Route::get('/', [AdminController::class, 'index']);
+    Route::post('/', [AdminController::class, 'store']);
+    Route::put('/{id}', [AdminController::class, 'update']);
+    Route::delete('/{id}', [AdminController::class, 'destroy']);
 });

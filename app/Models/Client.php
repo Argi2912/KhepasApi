@@ -5,16 +5,15 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class Platform extends Model
+class Client extends Model
 {
     use HasFactory;
+
     /**
      * Los atributos que se pueden asignar masivamente.
-     *
-     * @var array<int, string>
      */
     protected $fillable = [
         'name',
-        // Si tienes más campos (ej. 'description'), añádelos aquí
+        // Puedes añadir más campos aquí si tu modal los envía (ej: 'email', 'phone')
     ];
 }
