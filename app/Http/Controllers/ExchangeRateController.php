@@ -5,7 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use App\Models\ExchangeRate;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\Validator;
+use Illuminate\Support\Facades\Validator;
 use Exception;
 
 class ExchangeRateController extends Controller
@@ -71,7 +71,9 @@ class ExchangeRateController extends Controller
         $validator = Validator::make($data, [
             'name' => 'required|string|max:255',
             'value' => 'required|numeric',
-        ], [
+        ], 
+        
+        [
             'name.required' => 'El nombre es requerido',
             'name.string' => 'El nombre debe ser un string',
             'name.max' => 'El nombre debe tener maximo 255 caracteres',

@@ -47,12 +47,13 @@ class CurrenciesController extends Controller
             
             $currency = Currency::create($data);
 
+             DB::commit();  
             return response()->json([
                 'message' => 'Divisa creada con exito',
                 'data' => $currency
             ], 201);
 
-            DB::commit();
+        
         } catch (\Exception $e) {
             DB::rollBack();
             return response()->json([
