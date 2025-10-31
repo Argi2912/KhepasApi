@@ -10,6 +10,7 @@ class ExchangeRate extends Model
     use HasFactory;
       protected $fillable = [
         'name',
-        'value'
+        'value',
+        
     ];
 }

@@ -14,6 +14,7 @@ use App\Http\Controllers\ProviderController;
 use App\Http\Controllers\CorredorController;
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\SolicitudController;
+use App\Http\Controllers\DatabaseReportController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -142,4 +143,25 @@ Route::group([
     Route::post('/', [AdminController::class, 'store']);
     Route::put('/{id}', [AdminController::class, 'update']);
     Route::delete('/{id}', [AdminController::class, 'destroy']);
+});
+Route::group([
+    'middleware' =>['auth:api'],
+    
+],
+function () {
+
+    Route::get('/reports/clients', [DatabaseReportController::class, 'getClients'])
+         ->middleware('permission:view client database');
+
+    Route::get('/reports/providers', [DatabaseReportController::class, 'getProviders'])
+         ->middleware('permission:view provider database');
+
+    Route::get('/reports/brokers', [DatabaseReportController::class, 'getBrokers'])
+         ->middleware('permission:view broker database');
+
+    Route::get('/reports/admins', [DatabaseReportController::class, 'getAdmins'])
+         ->middleware('permission:view admin database');
+
+    Route::get('/reports/requests', [DatabaseReportController::class, 'getRequests'])
+         ->middleware('permission:view request history');
 });

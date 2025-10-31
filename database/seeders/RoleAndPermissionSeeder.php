@@ -2,174 +2,57 @@
 
 namespace Database\Seeders;
 
-use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 
 class RoleAndPermissionSeeder extends Seeder
 {
-    /**
-     * Run the database seeds.
-     *
-     * @return void
-     */
     public function run()
     {
-        $roleadmin= Role::firstOrCreate(
-            ['name' => 'admin']
-        );
+        // === Crear roles si no existen ===
+        $roleAdmin = Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'api']);
+        $roleAnalyst = Role::firstOrCreate(['name' => 'analyst', 'guard_name' => 'api']);
+        $roleUser = Role::firstOrCreate(['name' => 'user', 'guard_name' => 'api']);
 
-        $roleanalyst= Role::firstOrCreate(
-            ['name' => 'analyst']
-        );
-        $roleuser= Role::firstOrCreate(
-            ['name' => 'user']
-        );
+        // === Permisos de reportes ===
+        $permissions = [
+            'view client database',
+            'view provider database',
+            'view broker database',
+            'view admin database',
+            'view request history',
+            'export databases',
+        ];
 
-        Permission::FirstOrCreate(
-            ['name' => 'crear usuario']
-        );
+        foreach ($permissions as $perm) {
+            Permission::firstOrCreate(['name' => $perm, 'guard_name' => 'api']);
+        }
 
-        Permission::FirstOrCreate(
-            ['name' => 'editar usuario']
-        );
+        // === Permisos generales (los que ya tenías) ===
+        $generalPermissions = [
+            'crear usuario', 'editar usuario', 'eliminar usuario', 'ver usuario',
+            'crear caja', 'editar caja', 'eliminar caja', 'ver caja',
+            'crear divisa', 'editar divisa', 'eliminar divisa', 'ver divisa',
+            'crear tasa de cambio', 'editar tasa de cambio', 'eliminar tasa de cambio', 'ver tasa de cambio',
+            'crear plataforma', 'editar plataforma', 'eliminar plataforma', 'ver plataforma',
+            'crear solicitud', 'editar solicitud', 'eliminar solicitud', 'ver solicitud',
+            'crear tipo de solicitud', 'editar tipo de solicitud', 'eliminar tipo de solicitud', 'ver tipo de solicitud',
+            'crear transaccion', 'editar transaccion', 'eliminar transaccion', 'ver transaccion',
+            'aprobar solicitud', 'rechazar solicitud',
+        ];
 
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar usuario']
-        );
+        foreach ($generalPermissions as $perm) {
+            Permission::firstOrCreate(['name' => $perm, 'guard_name' => 'api']);
+        }
 
-        Permission::FirstOrCreate(
-            ['name' => 'ver usuario']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'crear caja']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'editar caja']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar caja']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'ver caja']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'crear divisa']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'editar divisa']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar divisa']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'ver divisa']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'crear tasa de cambio']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'editar tasa de cambio']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar tasa de cambio']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'ver tasa de cambio']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'crear plataforma']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'editar plataforma']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar plataforma']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'ver plataforma']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'crear solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'editar solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'ver solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'crear tipo de solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'editar tipo de solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar tipo de solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'ver tipo de solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'crear transaccion']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'editar transaccion']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar transaccion']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'ver transaccion']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'aprobar solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'rechazar solicitud']
-        );
-
-        Permission::FirstOrCreate(
-            ['name' => 'eliminar solicitud']
-        );
-
-        $roleadmin->givePermissionTo(Permission::all());
-        $roleanalyst->givePermissionTo(['ver usuario','ver caja','ver divisa','ver tasa de cambio','ver plataforma','crear solicitud','editar solicitud','ver solicitud','crear transaccion','editar transaccion','ver transaccion']);
-        $roleuser->givePermissionTo(['crear solicitud','ver solicitud']);
-
+        // === Asignar permisos ===
+        $roleAdmin->givePermissionTo(Permission::all());
+        $roleAnalyst->givePermissionTo([
+            'ver usuario', 'ver caja', 'ver divisa', 'ver tasa de cambio',
+            'ver plataforma', 'crear solicitud', 'editar solicitud', 'ver solicitud',
+            'crear transaccion', 'editar transaccion', 'ver transaccion',
+        ]);
+        $roleUser->givePermissionTo(['crear solicitud', 'ver solicitud']);
     }
 }
