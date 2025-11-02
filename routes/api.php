@@ -1,167 +1,114 @@
 <?php
 
-use App\Http\Controllers\AuthController;
-use App\Http\Controllers\CurrenciesController;
-use App\Http\Controllers\RegisterController;
-use App\Http\Controllers\UserController;
-use App\Http\Controllers\PermissionController;
-use App\Http\Controllers\CurrencyController;
-use App\Http\Controllers\ExchangeRateController;
-use App\Http\Controllers\PlatformController;
-use App\Http\Controllers\RequestTypeController;
-use App\Http\Controllers\ClientController;
-use App\Http\Controllers\ProviderController;
-use App\Http\Controllers\CorredorController;
-use App\Http\Controllers\AdminController;
-use App\Http\Controllers\SolicitudController;
-use App\Http\Controllers\DatabaseReportController;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\TransactionController;
+use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\StatsController;
+use App\Http\Controllers\Api\CashController;
+use App\Http\Controllers\Api\ExchangeRateController;
+use App\Http\Controllers\Api\ExchangeTransactionController;
 
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'permissions'
-], function () {
-    Route::get('/', [PermissionController::class, 'index']);
-    Route::post('/', [PermissionController::class, 'createPermission']);
-    Route::post('/role', [PermissionController::class, 'createRole']);
-    Route::put('/role/{id}', [PermissionController::class, 'updateRole']);
-    Route::post('/role-permissions', [PermissionController::class, 'assignRolePermissions']);
-    Route::post('/user-roles', [PermissionController::class, 'assignUserRoles']);
-    Route::post('/user-permissions', [PermissionController::class, 'assignUserDirectPermissions']);
-});
+/*
+|--------------------------------------------------------------------------
+| API Routes
+|--------------------------------------------------------------------------
+|
+| Aquí es donde puedes registrar las rutas de API para tu aplicación. 
+| Estas rutas son cargadas por el RouteServiceProvider dentro de un grupo 
+| que está asignado al grupo de middleware "api".
+|
+*/
 
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'auth'
-], function () {
-    Route::post('login', [AuthController::class, 'login']);
-    Route::post('logout', [AuthController::class, 'logout']);
-    Route::post('refresh', [AuthController::class, 'refresh']);
-    Route::get('me', [AuthController::class, 'me']);
-});
-
-Route::group([
-    'prefix' => 'register'
-], function () {
-    Route::post('register', [RegisterController::class, 'register']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'users'
-], function () {
-    Route::get('/', [UserController::class, 'index']);
-    Route::post('/', [UserController::class, 'store']);
-    Route::put('/{id}', [UserController::class, 'update']);
-    Route::delete('/{id}', [UserController::class, 'destroy']);
-    Route::patch('/{id}/status', [UserController::class, 'changeStatus']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'currencies'
-], function () {
-    Route::get('/', [CurrenciesController::class, 'index']);
-    Route::post('/', [CurrenciesController::class, 'store']);
-    Route::put('/{id}', [CurrenciesController::class, 'update']);
-    Route::delete('/{id}', [CurrenciesController::class, 'destroy']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'platforms'
-], function () {
-    Route::get('/', [PlatformController::class, 'index']);
-    Route::post('/', [PlatformController::class, 'store']);
-    Route::put('/{id}', [PlatformController::class, 'update']);
-    Route::delete('/{id}', [PlatformController::class, 'destroy']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'request-types'
-], function () {
-    Route::get('/', [RequestTypeController::class, 'index']);
-    Route::post('/', [RequestTypeController::class, 'store']);
-    Route::put('/{id}', [RequestTypeController::class, 'update']);
-    Route::delete('/{id}', [RequestTypeController::class, 'destroy']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'exchange-rates'
-], function () {
-    Route::get('/', [ExchangeRateController::class, 'index']);
-    Route::post('/', [ExchangeRateController::class, 'store']);
-    Route::put('/{id}', [ExchangeRateController::class, 'update']);
-    Route::delete('/{id}', [ExchangeRateController::class, 'destroy']);
-});
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'solicitudes'
-], function () {
-    Route::get('/', [SolicitudController::class, 'index']);
-    Route::post('/', [SolicitudController::class, 'store']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'clients'
-], function () {
-    Route::get('/', [ClientController::class, 'index']);
-    Route::post('/', [ClientController::class, 'store']);
-    Route::put('/{id}', [ClientController::class, 'update']);
-    Route::delete('/{id}', [ClientController::class, 'destroy']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'providers'
-], function () {
-    Route::get('/', [ProviderController::class, 'index']);
-    Route::post('/', [ProviderController::class, 'store']);
-    Route::put('/{id}', [ProviderController::class, 'update']);
-    Route::delete('/{id}', [ProviderController::class, 'destroy']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'corredores'
-], function () {
-    Route::get('/', [CorredorController::class, 'index']);
-    Route::post('/', [CorredorController::class, 'store']);
-    Route::put('/{id}', [CorredorController::class, 'update']);
-    Route::delete('/{id}', [CorredorController::class, 'destroy']);
-});
-
-Route::group([
-    'middleware' => 'api',
-    'prefix' => 'admins'
-], function () {
-    Route::get('/', [AdminController::class, 'index']);
-    Route::post('/', [AdminController::class, 'store']);
-    Route::put('/{id}', [AdminController::class, 'update']);
-    Route::delete('/{id}', [AdminController::class, 'destroy']);
-});
-Route::group([
-    'middleware' =>['auth:api'],
+// Versión principal de la API
+Route::prefix('v1')->group(function () {
     
-],
-function () {
+    // =========================================================
+    // 1. MÓDULO DE AUTENTICACIÓN (auth)
+    // =========================================================
+    Route::prefix('auth')->controller(AuthController::class)->group(function () {
+        
+        // Rutas Públicas
+        Route::post('register', 'register');
+        Route::post('login', 'login');
+        
+        // Rutas Protegidas (Requieren Token)
+        Route::middleware('auth:api')->group(function () {
+            Route::post('logout', 'logout');
+            Route::post('refresh', 'refresh');
+            Route::get('me', 'me');
+        });
+    });
 
-    Route::get('/reports/clients', [DatabaseReportController::class, 'getClients'])
-         ->middleware('permission:view client database');
+    // =========================================================
+    // GRUPO DE RUTAS PROTEGIDAS POR AUTH (Todos requieren token)
+    // =========================================================
+    Route::middleware('auth:api')->group(function () {
+        
+        // ---------------------------------------------------------
+        // 2. MÓDULO DE TRANSACCIONES Y CONTABILIDAD (transactions)
+        // ---------------------------------------------------------
+        Route::prefix('transactions')->controller(TransactionController::class)->group(function () {
+            
+            // Listado y Detalle
+            Route::get('/', 'index'); 
+            Route::get('{transaction}', 'show'); 
 
-    Route::get('/reports/providers', [DatabaseReportController::class, 'getProviders'])
-         ->middleware('permission:view provider database');
+            // 2.1. Creación de Transacciones (Asientos contables basados en el documento)
+            Route::post('register-cxp', 'storeAccountPayable');
+            Route::post('register-cxc', 'storeAccountReceivable');
+            Route::post('register-ingress', 'storeDirectIngress');
+            Route::post('register-egress', 'storeDirectEgress');
+            
+            // 2.2. Saldar Cuentas (Pagos/Cobros)
+            Route::post('pay-debt', 'payAccountPayable');
+            Route::post('receive-payment', 'receiveAccountReceivable');
+        });
+        
+        // ---------------------------------------------------------
+        // 3. MÓDULO DE USUARIOS (users)
+        // ---------------------------------------------------------
+        // Maneja el CRUD de Clientes, Corredores, Proveedores (Bases de Datos de Entidades)
+        Route::apiResource('users', UserController::class);
+        
+        // ---------------------------------------------------------
+        // 4. MÓDULO DE ESTADÍSTICAS Y REPORTES (stats)
+        // ---------------------------------------------------------
+        Route::prefix('stats')->controller(StatsController::class)->group(function () {
+            
+            // Dashboard Home (Balance General)
+            Route::get('balance-general', 'getNetBalance');
+            
+            // Estadísticas de Rendimiento
+            Route::get('production-by-broker', 'getBrokerProduction');
+            Route::get('total-volume', 'getVolumeOperated');
+            Route::get('total-commissions', 'getCommissionTotals');
+        });
 
-    Route::get('/reports/brokers', [DatabaseReportController::class, 'getBrokers'])
-         ->middleware('permission:view broker database');
+        // ---------------------------------------------------------
+        // 5. MÓDULO DE CAJA Y PLATAFORMAS (cashes)
+        // ---------------------------------------------------------
+        Route::apiResource('cashes', CashController::class);
+        
+        // Rutas específicas para el Cierre de Caja
+        Route::controller(CashController::class)->group(function () {
+            Route::post('cashes/closure/start', 'startClosure')->middleware('permission:start cash closure');
+            Route::post('cashes/closure/end', 'endClosure')->middleware('permission:end cash closure');
+        });
 
-    Route::get('/reports/admins', [DatabaseReportController::class, 'getAdmins'])
-         ->middleware('permission:view admin database');
+        // ---------------------------------------------------------
+        // 6. MÓDULO DE TASAS DE CAMBIO (exchange-rates)
+        // ---------------------------------------------------------
+        // CRUD de las tasas de cambio históricas
+        Route::apiResource('exchange-rates', ExchangeRateController::class);
 
-    Route::get('/reports/requests', [DatabaseReportController::class, 'getRequests'])
-         ->middleware('permission:view request history');
+        // ---------------------------------------------------------
+        // 7. MÓDULO DE INTERCAMBIO DE DIVISAS (exchange)
+        // ---------------------------------------------------------
+        Route::prefix('exchange')->controller(ExchangeTransactionController::class)->group(function () {
+            // Ejecutar la operación de cambio (asiento contable completo)
+            Route::post('execute', 'executeExchange');
+            // Route::get('history', 'index'); // Opcional: listar historial
+        });
+    });
 });
