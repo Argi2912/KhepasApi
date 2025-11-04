@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Transaction;
 use App\Models\TransactionDetail;
 use App\Models\Account;
+use App\Models\Cash; // <-- IMPORTAR EL MODELO CASH
 use App\Services\Interfaces\AccountingServiceInterface;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -44,6 +45,31 @@ class AccountingService implements AccountingServiceInterface
                     'amount' => abs($movement['amount']), // Siempre positivo en la base de datos
                     'is_debit' => $movement['is_debit'],
                 ]);
+
+                if ($movement['account_type'] === 'CASH' && isset($movement['cash_id'])) {
+                    
+                    $cash = Cash::find($movement['cash_id']);
+                    
+                    if ($cash) {
+                        if ($movement['is_debit'] === true) {
+                            // Débito a Caja = AUMENTO de balance (Ingreso/Cobro)
+                            $cash->balance += $movement['amount'];
+                        } else {
+                            // Crédito a Caja = DISMINUCIÓN de balance (Egreso/Pago)
+                            
+                            // Validar fondos antes de restar
+                            if ($cash->balance < $movement['amount']) {
+                                // Al lanzar una excepción DENTRO de DB::transaction, se hace ROLLBACK
+                                throw new \Exception('Fondos insuficientes en la caja para realizar este egreso.', 422);
+                            }
+                            
+                            $cash->balance -= $movement['amount'];
+                        }
+                        
+                        // Guardar el nuevo saldo de la caja.
+                        $cash->save(); 
+                    }
+                }
             }
             
             // 4. Registrar la Relación (si es un pago/cobro de una CXP/CXC)

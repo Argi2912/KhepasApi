@@ -25,6 +25,8 @@ class StoreCashRequest extends FormRequest
                 // Asegura que el nombre de la caja sea único dentro del tenant
                 Rule::unique('cashes')->where(fn($query) => $query->where('tenant_id', $tenantId)),
             ],
+
+            'balance' => 'required|numeric|min:0',
             // Debe ser una cuenta contable existente y de tipo 'CASH' para este tenant
             'account_id' => [
                 'required',
@@ -33,6 +35,10 @@ class StoreCashRequest extends FormRequest
                     return $query->where('tenant_id', $tenantId)
                         ->where('type', 'CASH');
                 }),
+            ],
+            'currency_id' => [
+                'required', 
+                'exists:currencies,id' // Asegura que la divisa exista
             ],
         ];
     }

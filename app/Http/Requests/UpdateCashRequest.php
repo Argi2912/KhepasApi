@@ -35,6 +35,10 @@ class UpdateCashRequest extends FormRequest
                                  ->where('type', 'CASH');
                 }),
             ],
+            'currency_id' => [
+                'nullable', // 'nullable' o 'sometimes' para que no sea obligatorio en cada UPDATE
+                'exists:currencies,id'
+            ],
         ];
     }
 }

@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Cash;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
 use App\Models\ExchangeRate;
@@ -9,60 +10,70 @@ use App\Models\Currency;
 
 class ExecuteExchangeRequest extends FormRequest
 {
+    private $cashGiven;
+    private $cashReceived;
+
     public function authorize(): bool
     {
-        // Solo usuarios con permiso para 'execute currency exchange' pueden realizar esta operación
         return Auth::check() && Auth::user()->can('execute currency exchange');
     }
 
     public function rules(): array
     {
-        return [
-            // Cajas y Monedas
+       return [
             'cash_given_id' => ['required', 'exists:cashes,id'],
             'cash_received_id' => ['required', 'exists:cashes,id', 'different:cash_given_id'],
-            'currency_given_id' => ['required', 'exists:currencies,id'],
-            'currency_received_id' => ['required', 'exists:currencies,id', 'different:currency_given_id'],
-            
-            // Montos y Tasa
             'amount_given' => ['required', 'numeric', 'min:0.01'],
             'amount_received' => ['required', 'numeric', 'min:0.01'],
             'fee' => ['nullable', 'numeric', 'min:0'],
             'description' => ['nullable', 'string', 'max:255'],
+            'date' => ['nullable', 'date'],
         ];
     }
     
-    /**
-     * Lógica de validación adicional (Chequear tasa de cambio)
-     */
     public function withValidator($validator)
     {
         $validator->after(function ($validator) {
             
-            if ($this->fails()) {
+            $this->cashGiven = Cash::with('currency')->find($this->cash_given_id);
+            $this->cashReceived = Cash::with('currency')->find($this->cash_received_id);
+
+            if (!$this->cashGiven || !$this->cashGiven->currency) {
+                $validator->errors()->add('cash_given_id', 'La caja de origen no existe o no tiene una divisa asignada.');
                 return;
             }
-
-            $tenantId = Auth::user()->tenant_id;
-            
-            // 1. Verificar si existe la Tasa de Cambio para hoy
-            $rate = ExchangeRate::where('tenant_id', $tenantId)
-                                ->where('from_currency_id', $this->currency_given_id)
-                                ->where('to_currency_id', $this->currency_received_id)
-                                ->whereDate('date', now()->toDateString())
-                                ->first();
-            
-            if (!$rate) {
-                // Si la tasa directa no existe, buscar la inversa o requerir la cotización
-                $validator->errors()->add('exchange_rate', 'No existe una tasa de cambio oficial registrada para este par de divisas y fecha.');
-            } else {
-                // Almacenar la tasa y la cuenta para usar en el controlador
-                $this->merge(['exchange_rate_object' => $rate]);
+            if (!$this->cashReceived || !$this->cashReceived->currency) {
+                $validator->errors()->add('cash_received_id', 'La caja de destino no existe o no tiene una divisa asignada.');
+                return;
+            }
+            if ($this->cashGiven->currency_id === $this->cashReceived->currency_id) {
+                 $validator->errors()->add('cash_received_id', 'No se puede intercambiar a una caja de la misma divisa.');
             }
 
-            // 2. Verificar que el balance de la caja dada es suficiente
-            // NOTA: Esto requiere calcular el saldo de la caja en tiempo real, 
-            // que se deja como mejora, pero es una validación crítica.
+            $totalDebit = $this->amount_given + ($this->fee ?? 0);
+            if ($this->cashGiven->balance < $totalDebit) {
+                $validator->errors()->add('amount_given', 'Fondos insuficientes en la caja de origen (incluyendo comisión).');
+            }
+            
+            $tenantId = Auth::user()->tenant_id;
+            
+            // Usamos la lógica correcta de buscar la tasa MÁS RECIENTE
+            $rate = ExchangeRate::where('tenant_id', $tenantId)
+                                ->where('from_currency_id', $this->cashGiven->currency_id)
+                                ->where('to_currency_id', $this->cashReceived->currency_id)
+                                ->latest('date') 
+                                ->first(); 
+            
+            if (!$rate) {
+                $validator->errors()->add('exchange_rate', 'No existe una tasa de cambio oficial registrada para este par de divisas.');
+            } else {
+                // Inyectamos los 3 valores que el controlador necesita
+                $this->merge([
+                    'exchange_rate_object' => $rate,
+                    'currency_given_id' => $this->cashGiven->currency_id,
+                    'currency_received_id' => $this->cashReceived->currency_id,
+                ]);
+            }
         });
     }
 }

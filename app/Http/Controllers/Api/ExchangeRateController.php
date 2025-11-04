@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\ExchangeRate;
 use App\Http\Requests\StoreExchangeRateRequest;
 use App\Http\Requests\UpdateExchangeRateRequest;
+use App\Models\ExchangeTransaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 
 class ExchangeRateController extends Controller
 {
@@ -72,8 +74,43 @@ class ExchangeRateController extends Controller
      */
     public function destroy(ExchangeRate $exchangeRate): JsonResponse
     {
-        // Se debe verificar si esta tasa fue usada en una ExchangeTransaction
+        // --- 2. VALIDACIÓN DE NEGOCIO ---
+        // (Basado en el modelo ExchangeTransaction.php)
+        if (ExchangeTransaction::where('exchange_rate_id', $exchangeRate->id)->exists()) {
+             return response()->json([
+                'message' => 'No se puede eliminar: La tasa está siendo usada en operaciones de intercambio.'
+             ], 422);
+        }
+        // ---------------------------------
+        
         $exchangeRate->delete();
         return response()->json(['message' => 'Tasa de cambio eliminada.']);
+    }
+
+    /**
+     * Obtiene la tasa de cambio más reciente para un par de divisas.
+     */
+    public function getLatestRate(Request $request): \Illuminate\Http\JsonResponse
+    {
+        $validated = $request->validate([
+            'from_currency_id' => 'required|exists:currencies,id',
+            'to_currency_id'   => 'required|exists:currencies,id|different:from_currency_id',
+        ]);
+
+        $rate = ExchangeRate::where('tenant_id', Auth::user()->tenant_id)
+                            ->where('from_currency_id', $validated['from_currency_id'])
+                            ->where('to_currency_id', $validated['to_currency_id'])
+                            ->latest('date') // La más reciente
+                            // --- INICIO DE LA CORRECCIÓN ---
+                            // Usar los nombres de los métodos (camelCase)
+                            ->with(['fromCurrency', 'toCurrency']) 
+                            // --- FIN DE LA CORRECCIÓN ---
+                            ->first();
+
+        if (!$rate) {
+            return response()->json(['message' => 'No se encontró una tasa de cambio para este par.'], 404);
+        }
+
+        return response()->json($rate);
     }
 }

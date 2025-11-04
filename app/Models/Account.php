@@ -18,6 +18,14 @@ class Account extends Model
         return $this->belongsTo(Tenant::class);
     }
 
+    /**
+     * Una cuenta (ej: "Caja General") puede tener muchas Cajas (ej: "Oficina", "Punto 1")
+     */
+    public function cashes()
+    {
+        return $this->hasMany(Cash::class);
+    }
+
     // Relación 1:M con TransactionDetails (para ver qué transacciones la afectan)
     public function details()
     {

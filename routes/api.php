@@ -1,39 +1,38 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\TransactionController;
-use App\Http\Controllers\Api\UserController;
-use App\Http\Controllers\Api\StatsController;
 use App\Http\Controllers\Api\CashController;
+use App\Http\Controllers\Api\CurrencyController;
 use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\ExchangeTransactionController;
+use App\Http\Controllers\Api\StatsController;
+use App\Http\Controllers\Api\TransactionController;
+use App\Http\Controllers\Api\UserController;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
 | API Routes
 |--------------------------------------------------------------------------
 |
-| Aquí es donde puedes registrar las rutas de API para tu aplicación. 
-| Estas rutas son cargadas por el RouteServiceProvider dentro de un grupo 
-| que está asignado al grupo de middleware "api".
+| Rutas API versionadas bajo el prefijo /v1.
 |
 */
 
-// Versión principal de la API
 Route::prefix('v1')->group(function () {
-    
+
     // =========================================================
-    // 1. MÓDULO DE AUTENTICACIÓN (auth)
+    // 1. MÓDULO DE AUTENTICACIÓN (Rutas Públicas)
+    // Prefijo: /api/v1/auth
     // =========================================================
     Route::prefix('auth')->controller(AuthController::class)->group(function () {
-        
-        // Rutas Públicas
         Route::post('register', 'register');
         Route::post('login', 'login');
-        
-        // Rutas Protegidas (Requieren Token)
+
+        // Rutas de Auth que requieren estar autenticado
         Route::middleware('auth:api')->group(function () {
+            Route::post('updateProfile', 'updateProfile');
             Route::post('logout', 'logout');
             Route::post('refresh', 'refresh');
             Route::get('me', 'me');
@@ -41,74 +40,104 @@ Route::prefix('v1')->group(function () {
     });
 
     // =========================================================
-    // GRUPO DE RUTAS PROTEGIDAS POR AUTH (Todos requieren token)
+    // 2. GRUPO DE RUTAS PROTEGIDAS (Requieren Token 'auth:api')
     // =========================================================
     Route::middleware('auth:api')->group(function () {
-        
-        // ---------------------------------------------------------
-        // 2. MÓDULO DE TRANSACCIONES Y CONTABILIDAD (transactions)
-        // ---------------------------------------------------------
-        Route::prefix('transactions')->controller(TransactionController::class)->group(function () {
-            
-            // Listado y Detalle
-            Route::get('/', 'index'); 
-            Route::get('{transaction}', 'show'); 
 
-            // 2.1. Creación de Transacciones (Asientos contables basados en el documento)
-            Route::post('register-cxp', 'storeAccountPayable');
-            Route::post('register-cxc', 'storeAccountReceivable');
-            Route::post('register-ingress', 'storeDirectIngress');
-            Route::post('register-egress', 'storeDirectEgress');
-            
-            // 2.2. Saldar Cuentas (Pagos/Cobros)
-            Route::post('pay-debt', 'payAccountPayable');
-            Route::post('receive-payment', 'receiveAccountReceivable');
-        });
-        
         // ---------------------------------------------------------
-        // 3. MÓDULO DE USUARIOS (users)
+        // MÓDULO DE USUARIOS (Clientes, Proveedores, etc.)
+        // Prefijo: /api/v1/users
         // ---------------------------------------------------------
-        // Maneja el CRUD de Clientes, Corredores, Proveedores (Bases de Datos de Entidades)
         Route::apiResource('users', UserController::class);
+
+        // ---------------------------------------------------------
+        // MÓDULO DE CUENTAS CONTABLES
+        // Prefijo: /api/v1/accounts
+        // ---------------------------------------------------------
+        Route::apiResource('accounts', AccountController::class);
         
         // ---------------------------------------------------------
-        // 4. MÓDULO DE ESTADÍSTICAS Y REPORTES (stats)
+        // MÓDULO DE DIVISAS
+        // Prefijo: /api/v1/currencies
+        // ---------------------------------------------------------
+        Route::apiResource('currencies', CurrencyController::class);
+
+        // ---------------------------------------------------------
+        // MÓDULO DE TASAS DE CAMBIO
+        // Prefijo: /api/v1/exchange-rates
+        // ---------------------------------------------------------
+        Route::prefix('exchange-rates')->controller(ExchangeRateController::class)->group(function () {
+            // !! IMPORTANTE: Ruta específica 'latest' DEBE ir ANTES de la ruta genérica '{id}'
+            Route::get('latest', 'getLatestRate');
+            
+            // Rutas CRUD (reemplaza a apiResource para ordenar 'latest' primero)
+            Route::get('/', 'index');
+            Route::post('/', 'store');
+            Route::get('/{exchange_rate}', 'show'); // {exchange_rate} es el comodín
+            Route::put('/{exchange_rate}', 'update');
+            Route::delete('/{exchange_rate}', 'destroy');
+        });
+
+        // ---------------------------------------------------------
+        // MÓDULO DE CAJAS (Cashes) Y CIERRES
+        // Prefijo: /api/v1/cashes
+        // ---------------------------------------------------------
+        Route::prefix('cashes')->controller(CashController::class)->group(function () {
+            // Rutas de Cierre de Caja
+            Route::post('closure/start', 'startClosure')->middleware('permission:start cash closure');
+            Route::post('closure/end', 'endClosure')->middleware('permission:end cash closure');
+            
+            // Rutas CRUD para Cajas (apiResource movido aquí para agrupar)
+            Route::get('/', 'index');
+            Route::post('/', 'store');
+            Route::get('/{cash}', 'show');
+            Route::put('/{cash}', 'update');
+            Route::delete('/{cash}', 'destroy');
+        });
+
+        // ---------------------------------------------------------
+        // MÓDULO DE TRANSACCIONES (Generales e Intercambios)
+        // Prefijo: /api/v1/transactions
+        // ---------------------------------------------------------
+        Route::prefix('transactions')->group(function () {
+            
+            // Transacciones Generales (CXP, CXC, Ingresos, Egresos)
+            Route::controller(TransactionController::class)->group(function () {
+                Route::get('/', 'index');
+                Route::get('{transaction}', 'show');
+                Route::post('register-cxp', 'storeAccountPayable');
+                Route::post('register-cxc', 'storeAccountReceivable');
+                Route::post('register-ingress', 'storeDirectIngress');
+                Route::post('register-egress', 'storeDirectEgress');
+                Route::post('pay-debt', 'payAccountPayable');
+                Route::post('receive-payment', 'receiveAccountReceivable');
+            });
+
+            // !! CORRECCIÓN 405:
+            // Se mueve la ruta de 'executeExchange' aquí para que coincida con la URL del frontend:
+            // POST /api/v1/transactions/execute-exchange
+            Route::post('execute-exchange', [ExchangeTransactionController::class, 'executeExchange']);
+        });
+
+        // ---------------------------------------------------------
+        // MÓDULO DE ESTADÍSTICAS Y REPORTES
+        // Prefijo: /api/v1/stats
         // ---------------------------------------------------------
         Route::prefix('stats')->controller(StatsController::class)->group(function () {
-            
-            // Dashboard Home (Balance General)
             Route::get('balance-general', 'getNetBalance');
-            
-            // Estadísticas de Rendimiento
             Route::get('production-by-broker', 'getBrokerProduction');
             Route::get('total-volume', 'getVolumeOperated');
             Route::get('total-commissions', 'getCommissionTotals');
         });
 
-        // ---------------------------------------------------------
-        // 5. MÓDULO DE CAJA Y PLATAFORMAS (cashes)
-        // ---------------------------------------------------------
-        Route::apiResource('cashes', CashController::class);
+        /*
+        // --- RUTA ANTIGUA DE INTERCAMBIO (ELIMINADA) ---
+        // Se elimina este prefijo '/exchange' porque la ruta se movió a '/transactions'
         
-        // Rutas específicas para el Cierre de Caja
-        Route::controller(CashController::class)->group(function () {
-            Route::post('cashes/closure/start', 'startClosure')->middleware('permission:start cash closure');
-            Route::post('cashes/closure/end', 'endClosure')->middleware('permission:end cash closure');
-        });
-
-        // ---------------------------------------------------------
-        // 6. MÓDULO DE TASAS DE CAMBIO (exchange-rates)
-        // ---------------------------------------------------------
-        // CRUD de las tasas de cambio históricas
-        Route::apiResource('exchange-rates', ExchangeRateController::class);
-
-        // ---------------------------------------------------------
-        // 7. MÓDULO DE INTERCAMBIO DE DIVISAS (exchange)
-        // ---------------------------------------------------------
         Route::prefix('exchange')->controller(ExchangeTransactionController::class)->group(function () {
-            // Ejecutar la operación de cambio (asiento contable completo)
-            Route::post('execute', 'executeExchange');
-            // Route::get('history', 'index'); // Opcional: listar historial
+             Route::post('execute', 'executeExchange'); // <-- Esta era la ruta incorrecta
         });
+        */
+
     });
 });

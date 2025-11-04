@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Cash;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Facades\Auth;
 
@@ -25,8 +26,16 @@ class StoreDirectEgressRequest extends FormRequest
     
     public function passedValidation()
     {
-        // Se añade el nombre de la cuenta de caja para que el Controller lo use
-        $cash = \App\Models\Cash::findOrFail($this->cash_id);
+        // --- SOLUCIÓN: Usar with('account') ---
+        $cash = Cash::with('account')->findOrFail($this->cash_id);
+        
+        // La relación 'account' debe existir porque la cuenta de la caja es obligatoria.
+        // Verificamos que no sea nulo antes de acceder a 'name'.
+        if (is_null($cash->account)) {
+             // Esto no debería pasar con la validación Rule::exists, pero es un seguro.
+             throw new \Exception("La caja seleccionada no tiene una cuenta contable asociada.");
+        }
+        
         $this->merge(['cash_account_name' => $cash->account->name]);
     }
 }

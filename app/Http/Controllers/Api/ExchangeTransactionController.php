@@ -4,121 +4,218 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\ExecuteExchangeRequest;
-use App\Services\Interfaces\AccountingServiceInterface;
 use App\Models\ExchangeTransaction;
 use App\Models\Account;
 use App\Models\Cash;
+use App\Models\Transaction;
+use App\Models\TransactionDetail;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class ExchangeTransactionController extends Controller
 {
-    protected AccountingServiceInterface $accountingService;
-
-    public function __construct(AccountingServiceInterface $accountingService)
+    public function __construct()
     {
-        $this->accountingService = $accountingService;
         $this->middleware('permission:execute currency exchange');
     }
 
     /**
+     * Helper para obtener el ID de una cuenta por su nombre.
+     */
+    private function getAccountId(string $accountName, int $tenantId): int
+    {
+        $account = Account::where('name', $accountName)
+                          ->where('tenant_id', $tenantId)
+                          ->first();
+    
+        if (!$account) {
+            throw new \Exception("Error contable: La cuenta maestra '$accountName' no se encuentra registrada para el inquilino.", 422);
+        }
+        
+        return $account->id;
+    }
+
+    /**
      * Ejecuta una operación de intercambio de divisas, registrando el asiento contable.
+     * MODIFICACIÓN: Desglosa los movimientos brutos para la cuenta de caja compartida.
      */
     public function executeExchange(ExecuteExchangeRequest $request): JsonResponse
     {
         $validated = $request->validated();
         $user = Auth::user();
-        $rateObject = $request->get('exchange_rate_object'); // Objeto de tasa validado
+        $tenantId = $user->tenant_id;
         
-        // Cajas
-        $cashGiven = Cash::findOrFail($validated['cash_given_id']);
-        $cashReceived = Cash::findOrFail($validated['cash_received_id']);
+        $rateObject = $request->input('exchange_rate_object'); 
+        $currencyGivenId = $request->input('currency_given_id');
+        $currencyReceivedId = $request->input('currency_received_id');
 
-        // --- 1. Determinar Ganancia/Pérdida por Spread (diferencia) ---
-        // Asumiendo que la moneda base del sistema (para efectos contables) es la moneda de la tasa de cambio
-        $effectiveRate = $validated['amount_received'] / $validated['amount_given'];
-        $systemSpread = $rateObject->rate - $effectiveRate; // Spread del sistema
+        if (!$rateObject) {
+            return response()->json(['message' => 'Error interno: No se pudo determinar la tasa de cambio.'], 500);
+        }
+        
+        $amountGiven = (float) $validated['amount_given'];
+        $amountReceived = (float) $validated['amount_received'];
+        $fee = (float) ($validated['fee'] ?? 0);
+        $totalGivenCredit = $amountGiven + $fee; // Monto total que sale de la caja de origen
 
-        // La ganancia/pérdida se registra en el asiento para balancear el débito y crédito.
-        $gainLossAmount = abs($systemSpread * $validated['amount_given']) + ($validated['fee'] ?? 0);
-        $isGain = $systemSpread > 0 || ($validated['fee'] ?? 0) > 0;
-
-        // --- 2. Preparar Cuentas de Ganancia/Pérdida ---
-        $gainLossAccount = Account::where('tenant_id', $user->tenant_id)
-                                  ->where('name', $isGain ? 'Ganancia por Tasa de Cambio' : 'Pérdida por Tasa de Cambio')
-                                  ->firstOrFail();
-
-        // --- 3. Preparar los Movimientos Contables (Asiento Cuádruple) ---
-        $movements = [
-            // 1. Salida de Dinero (Activo disminuye) -> CRÉDITO
-            [ 
-                'account_name' => $cashGiven->account->name, 
-                'amount' => $validated['amount_given'], 
-                'is_debit' => false, 
-                'account_type' => 'CASH'
-            ],
-            // 2. Entrada de Dinero (Activo aumenta) -> DÉBITO
-            [ 
-                'account_name' => $cashReceived->account->name, 
-                'amount' => $validated['amount_received'], 
-                'is_debit' => true, 
-                'account_type' => 'CASH'
-            ],
-            // 3. Ganancia/Pérdida (Ingreso/Egreso) -> Para CUADRAR el asiento
-            [ 
-                'account_name' => $gainLossAccount->name, 
-                'amount' => $gainLossAmount, 
-                // Si es GANANCIA (INGRESS): CRÉDITO. Si es PÉRDIDA (EGRESS): DÉBITO
-                'is_debit' => !$isGain, 
-                'account_type' => $isGain ? 'INGRESS' : 'EGRESS'
-            ]
-        ];
-        
-        // Ajustar el asiento para que cuadre a cero (simplificado)
-        // Ejemplo: Vendo 100 USD (sale 100). Recibo 95 EUR (entra 95). La diferencia (5) debe ir al débito para cuadrar.
-        // En este MVP, el monto más grande va al lado que equilibre el asiento.
-        
-        // La suma de débitos y créditos debe ser igual al final (la diferencia es la ganancia/pérdida).
-        // Si Amount Received > Amount Given: La diferencia va al DÉBITO.
-        // Si Amount Given > Amount Received: La diferencia va al CRÉDITO.
-        
-        // Aquí simplificamos usando la diferencia calculada en la variable $gainLossAmount 
-        // y aseguramos que el asiento siempre cuadre.
-        
         try {
-            // 4. Registrar la Transacción Contable
-            $transaction = $this->accountingService->registerTransaction(
-                [
-                    'tenant_id' => $user->tenant_id,
+            return DB::transaction(function () use ($validated, $user, $tenantId, $rateObject, $currencyGivenId, $currencyReceivedId, $amountGiven, $amountReceived, $fee, $totalGivenCredit) {
+
+                // 1. Bloquear Cajas y Validar Fondos
+                $cashGiven = Cash::with('account')
+                                 ->where('id', $validated['cash_given_id'])
+                                 ->where('tenant_id', $tenantId)
+                                 ->lockForUpdate()
+                                 ->firstOrFail();
+                
+                $cashReceived = Cash::with('account')
+                                    ->where('id', $validated['cash_received_id'])
+                                    ->where('tenant_id', $tenantId)
+                                    ->lockForUpdate()
+                                    ->firstOrFail();
+
+                if ($cashGiven->balance < $totalGivenCredit) {
+                    throw new \Exception('Fondos insuficientes en la caja de origen.', 422);
+                }
+
+                // 2. Lógica Contable
+                $amountReceivedEquivalent = $amountReceived / $rateObject->rate;
+                $gainLoss = $amountReceivedEquivalent - $amountGiven; 
+
+                $cashGivenAccountId = $cashGiven->account_id;
+                $cashReceivedAccountId = $cashReceived->account_id;
+                $isCashAccountShared = ($cashGivenAccountId === $cashReceivedAccountId);
+                
+                // Nombres alineados con tu DB:
+                $feeAccountId = $fee > 0 ? $this->getAccountId('Ingresos por Comisiones', $tenantId) : null;
+                $gainLossAccountId = null;
+
+                if ($gainLoss != 0) {
+                    $accountName = $gainLoss > 0 ? 'Ganancia por Tasa de Cambio' : 'Pérdida por Tasa de Cambio';
+                    $gainLossAccountId = $this->getAccountId($accountName, $tenantId);
+                }
+                
+                // ... (Validaciones Defensivas se mantienen)
+
+
+                // 3. Crear Encabezado de Transacción
+                $transaction = Transaction::create([
+                    'tenant_id' => $tenantId,
                     'user_id' => $user->id,
-                    'date' => now(),
-                    'description' => 'Intercambio de ' . $validated['amount_given'] . ' a ' . $validated['amount_received'],
+                    'date' => $validated['date'] ?? now(),
+                    'description' => $validated['description'] ?? 'Intercambio de divisas (Asiento desglosado/consolidado)',
                     'status' => 'COMPLETED',
-                ],
-                $movements
-            );
+                    'reference_code' => 'EXC-' . Str::random(6),
+                ]);
 
-            // 5. Registrar el Detalle del Intercambio (Tabla ExchangeTransaction)
-            $exchangeDetail = ExchangeTransaction::create([
-                'transaction_id' => $transaction->id,
-                'exchange_rate_id' => $rateObject->id,
-                'currency_given_id' => $validated['currency_given_id'],
-                'currency_received_id' => $validated['currency_received_id'],
-                'amount_given' => $validated['amount_given'],
-                'amount_received' => $validated['amount_received'],
-                'fee' => $validated['fee'] ?? 0,
-            ]);
+                // 4. Acumular Detalles (Asientos)
+                $accountMovements = [];
 
-            return response()->json([
-                'message' => 'Operación de intercambio registrada exitosamente.', 
-                'transaction' => $transaction,
-                'detail' => $exchangeDetail
-            ], 201);
-            
+                $recordMovement = function ($accountId, $amount, $isDebit) use (&$accountMovements) {
+                    if ($amount <= 0 || !$accountId) return; 
+
+                    $amountCents = (int) round($amount * 100);
+                    $sign = $isDebit ? 1 : -1;
+                    
+                    if (!isset($accountMovements[$accountId])) {
+                        $accountMovements[$accountId] = 0;
+                    }
+                    
+                    $accountMovements[$accountId] += $amountCents * $sign;
+                };
+
+                // A. MOVIMIENTOS DE CAJA (Se registrarán por separado si se comparten, sino se consolidan)
+                $recordMovement($cashGivenAccountId, $totalGivenCredit, false); // CRÉDITO: Salida total
+                $recordMovement($cashReceivedAccountId, $amountReceivedEquivalent, true); // DÉBITO: Entrada equivalente
+
+                // B. GASTO POR COMISIÓN (DÉBITO)
+                if ($fee > 0 && $feeAccountId) {
+                    $recordMovement($feeAccountId, $fee, true);
+                }
+
+                // C. BALANCEAR ASIENTO (Ganancia o Pérdida)
+                if ($gainLoss > 0) {
+                    $recordMovement($gainLossAccountId, $gainLoss, false); // Ganancia: CRÉDITO
+                } elseif ($gainLoss < 0) {
+                    $recordMovement($gainLossAccountId, abs($gainLoss), true); // Pérdida: DÉBITO
+                }
+
+                // ==========================================================
+                // 5. INSERCIÓN DE DETALLES: Separando Caja de otras cuentas
+                // ==========================================================
+                
+                // Si la cuenta es compartida, insertamos los movimientos brutos de caja primero
+                if ($isCashAccountShared) {
+                     // 5.1. Desglose de Caja para ver el flujo bruto
+                     
+                     // DÉBITO: Entrada (equivalente) 
+                    TransactionDetail::create([
+                        'transaction_id' => $transaction->id,
+                        'account_id' => $cashReceivedAccountId,
+                        'amount' => $amountReceivedEquivalent, // Monto Bruto de Entrada (ej: 8.00)
+                        'is_debit' => true,
+                    ]);
+                     // CRÉDITO: Salida (total)
+                    TransactionDetail::create([
+                        'transaction_id' => $transaction->id,
+                        'account_id' => $cashGivenAccountId, 
+                        'amount' => $totalGivenCredit, // Monto Bruto de Salida (ej: 8.12)
+                        'is_debit' => false,
+                    ]);
+                    
+                    // Eliminamos el ID de la caja del array de movimientos para que no se procese más.
+                    unset($accountMovements[$cashGivenAccountId]);
+                }
+
+                // 5.2. Insertar el resto de los movimientos consolidados (Comisión, Ganancia/Pérdida)
+                foreach ($accountMovements as $accountId => $netMovementCents) {
+                    // Si el neto es cero (ej: si la comisión o gainLoss fueran 0), lo saltamos.
+                    if ($netMovementCents === 0) continue; 
+
+                    // Registramos el movimiento neto de las cuentas de Gasto/Ingreso.
+                    $isDebit = $netMovementCents > 0;
+                    $amount = abs($netMovementCents) / 100;
+
+                    TransactionDetail::create([
+                        'transaction_id' => $transaction->id,
+                        'account_id' => $accountId,
+                        'amount' => $amount,
+                        'is_debit' => $isDebit,
+                    ]);
+                }
+
+                // 6. ACTUALIZACIÓN CRUCIAL DE BALANCES DE CAJA (Movimiento real de divisas)
+                $cashGiven->balance -= $totalGivenCredit;
+                $cashReceived->balance += $amountReceived;
+                $cashGiven->save();
+                $cashReceived->save();
+
+                // 7. Registrar el Detalle del Intercambio (Trazabilidad)
+                $exchangeDetail = ExchangeTransaction::create([
+                    'transaction_id' => $transaction->id,
+                    'exchange_rate_id' => $rateObject->id,
+                    'currency_given_id' => $currencyGivenId,
+                    'currency_received_id' => $currencyReceivedId,
+                    'amount_given' => $amountGiven,
+                    'amount_received' => $amountReceived,
+                    'fee' => $fee,
+                ]);
+
+                return response()->json([
+                    'message' => 'Operación de intercambio y comisión registradas exitosamente.', 
+                    'transaction' => $transaction->load('details'),
+                    'detail' => $exchangeDetail
+                ], 201);
+
+            });
         } catch (\Exception $e) {
-            // Si la transacción falla, se revierte el DB::transaction del AccountingService
-            return response()->json(['message' => 'Error al ejecutar intercambio.', 'error' => $e->getMessage()], 500);
+            $statusCode = $e->getCode() == 422 ? 422 : 500;
+            return response()->json([
+                'message' => $e->getMessage(), 
+                'error' => $e->getMessage()
+            ], $statusCode);
         }
     }
 }

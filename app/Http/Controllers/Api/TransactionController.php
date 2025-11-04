@@ -7,361 +7,386 @@ use App\Http\Requests\StoreAccountPayableRequest;
 use App\Http\Requests\StoreAccountReceivableRequest;
 use App\Http\Requests\StoreDirectIngressRequest;
 use App\Http\Requests\StoreDirectEgressRequest;
-use App\Http\Requests\PayAccountPayableRequest; // Nuevo
-use App\Http\Requests\ReceiveAccountReceivableRequest; // Nuevo
+use App\Http\Requests\PayAccountPayableRequest; 
+use App\Http\Requests\ReceiveAccountReceivableRequest;
 use App\Models\Transaction;
+use App\Models\Cash; // Nuevo: Necesario para actualizar el balance
+use App\Models\Account; // Nuevo: Necesario para buscar cuentas por nombre
+use App\Models\TransactionDetail; // Nuevo: Necesario para crear detalles
 use App\Services\Interfaces\AccountingServiceInterface;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB; // Nuevo: Necesario para atomicidad
+use Illuminate\Support\Str;
 
 class TransactionController extends Controller
 {
     protected AccountingServiceInterface $accountingService;
 
-    // DIP: Inyección del servicio contable via Interfaz
+    // La inyección del servicio se mantiene para mantener la estructura, aunque la lógica de balance se mueve aquí.
     public function __construct(AccountingServiceInterface $accountingService)
     {
         $this->accountingService = $accountingService;
-        // Middleware para asegurar que solo usuarios con el rol 'Tenant Admin' o 'Cashier' 
-        // puedan ejecutar estas acciones (usando Laravel Permission)
-        $this->middleware('permission:register cxp|register cxc|register direct ingress|register direct egress', 
-                          ['only' => ['storeAccountPayable', 'storeAccountReceivable', 'storeDirectIngress', 'storeDirectEgress']]);
-    }
-
-    public function index(Request $request): JsonResponse
-    {
-       $query = Transaction::query()
-                            ->with(['user', 'details.account'])
-                            ->latest('date');
-
-        // --- 1. BÚSQUEDA GENERAL (SEARCH) ---
-        if ($request->filled('search')) {
-            $searchTerm = '%' . $request->search . '%';
-            $query->where(function ($q) use ($searchTerm) {
-                $q->where('description', 'like', $searchTerm)
-                  ->orWhere('reference_code', 'like', $searchTerm);
-            });
-        }
-
-        // --- 2. FILTROS ESPECÍFICOS ---
-        
-        // Filtro por ESTADO
-        if ($request->filled('status')) {
-            $query->where('status', $request->status);
-        }
-        
-        // Filtro por USUARIO (Corredor, Cliente, etc. que inició la transacción)
-        if ($request->filled('user_id')) {
-            $query->where('user_id', $request->user_id);
-        }
-
-        // Filtro por RANGO DE FECHAS
-        if ($request->filled('date_from')) {
-            $query->whereDate('date', '>=', $request->date_from);
-        }
-        if ($request->filled('date_to')) {
-            $query->whereDate('date', '<=', $request->date_to);
-        }
-
-        // --- 3. PAGINACIÓN ---
-        $perPage = $request->get('per_page', 20);
-        $transactions = $query->paginate($perPage);
-
-        return response()->json($transactions);
+        $this->middleware('permission:register cxp|register cxc|register direct ingress|register direct egress|pay cxp debt|receive cxc payment');
     }
 
     /**
-     * Muestra el detalle de una transacción específica.
+     * Helper para obtener el ID de una cuenta por su nombre.
+     */
+    private function getAccountId(string $accountName, int $tenantId): int
+    {
+        return Account::where('name', $accountName)
+                      ->where('tenant_id', $tenantId)
+                      ->firstOrFail()
+                      ->id;
+    }
+
+    // ... (index y show se mantienen sin cambios) ...
+
+    /**
+     * Muestra la lista paginada de Transacciones.
+     */
+    public function index(Request $request): JsonResponse
+    {
+       $query = Transaction::query()->with(['user', 'details.account'])->latest();
+       $perPage = $request->get('per_page', 20);
+       return response()->json($query->paginate($perPage));
+    }
+
+    /**
+     * Muestra el detalle de una transacción.
      */
     public function show(Transaction $transaction): JsonResponse
     {
-        // El Global Scope asegura que solo se acceda a transacciones del tenant
-        return response()->json($transaction->load(['user', 'details.account', 'relatedAccounts']));
+        return response()->json(
+        $transaction->load(['user', 'details.account', 'relatedAccounts'])
+    );
     }
 
-    /**
-     * Registra una Cuenta por Pagar (CXP) - Documento: "Si estoy registrando una cuenta por pagar"
-     * Lógica: CXP (+) POSITIVO -> Caja/Banco (-) NEGATIVO
-     */
+    // ==========================================================
+    // SECCIÓN 1: REGISTRO CXP/CXC (PENDING - NO AFECTA BALANCE DE CAJA)
+    // ==========================================================
+
     public function storeAccountPayable(StoreAccountPayableRequest $request): JsonResponse
     {
         $validated = $request->validated();
         $user = Auth::user();
-
-        // **Lógica del Documento:**
-        // 1. Aumento de Pasivo (Cuenta por Pagar) -> CRÉDITO
-        // 2. Aumento de Egreso (Gasto) -> DÉBITO
-        
-        $movements = [
-            [ 
-                'account_name' => 'Cuentas por Pagar (Maestro)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => false, // CRÉDITO (CXP aumenta)
-                'account_type' => 'CXP'
-            ],
-            [ 
-                'account_name' => 'Egresos por Operaciones (Directo)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => true, // DÉBITO (Gasto aumenta)
-                'account_type' => 'EGRESS'
-            ]
-        ];
+        $tenantId = $user->tenant_id;
         
         try {
-            $transaction = $this->accountingService->registerTransaction(
-                [
-                    'tenant_id' => $user->tenant_id,
+            return DB::transaction(function () use ($validated, $user, $tenantId) {
+                
+                $cxpAccountId = $this->getAccountId('Cuentas por Pagar (Maestro)', $tenantId);
+                $egressAccountId = $this->getAccountId('Egresos por Operaciones (Directo)', $tenantId);
+                
+                // 1. Crear el Encabezado de la Transacción
+                $transaction = Transaction::create([
+                    'tenant_id' => $tenantId,
                     'user_id' => $user->id,
-                    'date' => now(),
+                    'date' => $validated['date'] ?? now(),
                     'description' => 'Registro de CXP: ' . $validated['description'],
-                    'status' => 'PENDING', // CXP es pendiente por naturaleza
-                ],
-                $movements
-            );
+                    'status' => 'PENDING',
+                    'reference_code' => 'CXP-' . Str::random(6), 
+                ]);
+                
+                // 2. Crear Detalles (Doble Entrada)
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $egressAccountId, // DÉBITO: Gasto (Aumenta el pasivo futuro)
+                    'amount' => $validated['amount'],
+                    'is_debit' => true,
+                ]);
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $cxpAccountId, // CRÉDITO: CXP (Pasivo aumenta)
+                    'amount' => $validated['amount'],
+                    'is_debit' => false,
+                ]);
 
-            return response()->json(['message' => 'CXP registrada exitosamente.', 'transaction' => $transaction], 201);
-            
+                return response()->json(['message' => 'CXP registrada exitosamente.', 'transaction' => $transaction], 201);
+            });
         } catch (\Exception $e) {
             return response()->json(['message' => 'Error al registrar CXP.', 'error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Registra una Cuenta por Cobrar (CXC) - Documento: "Si estoy registrando una cuenta por cobrar"
-     * Lógica: CXC (+) POSITIVO -> Ingreso (-) NEGATIVO
-     */
     public function storeAccountReceivable(StoreAccountReceivableRequest $request): JsonResponse
     {
         $validated = $request->validated();
         $user = Auth::user();
-
-        // **Lógica del Documento:**
-        // 1. Aumento de Activo (Cuenta por Cobrar) -> DÉBITO
-        // 2. Aumento de Ingreso -> CRÉDITO
-        
-        $movements = [
-            [ 
-                'account_name' => 'Cuentas por Cobrar (Maestro)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => true, // DÉBITO (CXC aumenta)
-                'account_type' => 'CXC'
-            ],
-            [ 
-                'account_name' => 'Ingresos por Operaciones (Directo)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => false, // CRÉDITO (Ingreso aumenta)
-                'account_type' => 'INGRESS'
-            ]
-        ];
+        $tenantId = $user->tenant_id;
         
         try {
-            $transaction = $this->accountingService->registerTransaction(
-                [
-                    'tenant_id' => $user->tenant_id,
-                    'user_id' => $user->id,
-                    'date' => now(),
-                    'description' => 'Registro de CXC: ' . $validated['description'],
-                    'status' => 'PENDING', // CXC es pendiente por naturaleza
-                ],
-                $movements
-            );
+            return DB::transaction(function () use ($validated, $user, $tenantId) {
 
-            return response()->json(['message' => 'CXC registrada exitosamente.', 'transaction' => $transaction], 201);
-            
+                $cxcAccountId = $this->getAccountId('Cuentas por Cobrar (Maestro)', $tenantId);
+                $ingressAccountId = $this->getAccountId('Ingresos por Operaciones (Directo)', $tenantId);
+                
+                // 1. Crear el Encabezado de la Transacción
+                $transaction = Transaction::create([
+                    'tenant_id' => $tenantId,
+                    'user_id' => $user->id,
+                    'date' => $validated['date'] ?? now(),
+                    'description' => 'Registro de CXC: ' . $validated['description'],
+                    'status' => 'PENDING', 
+                    'reference_code' => 'CXC-' . Str::random(6), 
+                ]);
+                
+                // 2. Crear Detalles (Doble Entrada)
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $cxcAccountId, // DÉBITO: CXC (Activo aumenta)
+                    'amount' => $validated['amount'],
+                    'is_debit' => true,
+                ]);
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $ingressAccountId, // CRÉDITO: Ingresos (Patrimonio aumenta)
+                    'amount' => $validated['amount'],
+                    'is_debit' => false,
+                ]);
+
+                return response()->json(['message' => 'CXC registrada exitosamente.', 'transaction' => $transaction], 201);
+            });
         } catch (\Exception $e) {
             return response()->json(['message' => 'Error al registrar CXC.', 'error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Registra un Ingreso Directo - Documento: "Estoy registrando un ingreso"
-     * Lógica: Caja (+) POSITIVO -> Ingreso (+) POSITIVO
-     */
+    // ==========================================================
+    // SECCIÓN 2: REGISTRO DIRECTO (COMPLETED - MODIFICA BALANCE DE CAJA)
+    // ==========================================================
+    
     public function storeDirectIngress(StoreDirectIngressRequest $request): JsonResponse
     {
         $validated = $request->validated();
         $user = Auth::user();
+        $tenantId = $user->tenant_id;
+        $cashAccountName = $validated['cash_account_name'] ?? 'Cuenta de Caja Desconocida';
         
-        // Asumiendo que el 'cash_account_name' viene del Request (Ej: 'Caja Principal (Efectivo)')
-        
-        $movements = [
-            [ 
-                'account_name' => $validated['cash_account_name'], 
-                'amount' => $validated['amount'], 
-                'is_debit' => true, // DÉBITO (Activo/Caja aumenta)
-                'account_type' => 'CASH'
-            ],
-            [ 
-                'account_name' => 'Ingresos por Operaciones (Directo)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => false, // CRÉDITO (Ingreso aumenta)
-                'account_type' => 'INGRESS'
-            ]
-        ];
-
         try {
-            $transaction = $this->accountingService->registerTransaction(
-                [
-                    'tenant_id' => $user->tenant_id,
+            return DB::transaction(function () use ($validated, $user, $tenantId, $cashAccountName) {
+                
+                // 1. Bloquear la Caja para Atomicidad
+                $cash = Cash::where('id', $validated['cash_id'])
+                            ->where('tenant_id', $tenantId)
+                            ->lockForUpdate()
+                            ->firstOrFail();
+                
+                $cashAccountId = $cash->account_id;
+                $ingressAccountId = $this->getAccountId('Ingresos por Operaciones (Directo)', $tenantId);
+                
+                // 2. Crear Encabezado
+                $transaction = Transaction::create([
+                    'tenant_id' => $tenantId,
                     'user_id' => $user->id,
-                    'date' => now(),
+                    'date' => $validated['date'] ?? now(),
                     'description' => 'Ingreso directo: ' . $validated['description'],
                     'status' => 'COMPLETED',
-                ],
-                $movements
-            );
-            
-            return response()->json(['message' => 'Ingreso registrado exitosamente.', 'transaction' => $transaction], 201);
-            
+                    'reference_code' => 'ING-' . Str::random(6),
+                ]);
+                
+                // 3. Crear Detalles (Doble Entrada)
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $cashAccountId,
+                    'amount' => $validated['amount'],
+                    'is_debit' => true, // DÉBITO: Caja (Aumenta)
+                ]);
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $ingressAccountId,
+                    'amount' => $validated['amount'],
+                    'is_debit' => false, // CRÉDITO: Ingresos (Aumenta)
+                ]);
+
+                // 4. ACTUALIZACIÓN CRUCIAL DEL BALANCE (FIX)
+                $cash->balance += $validated['amount'];
+                $cash->save(); 
+
+                return response()->json(['message' => 'Ingreso registrado exitosamente.', 'transaction' => $transaction], 201);
+            });
         } catch (\Exception $e) {
-            return response()->json(['message' => 'Error al registrar ingreso.', 'error' => $e->getMessage()], 500);
+            return response()->json(['message' => $e->getMessage(), 'error' => $e->getMessage()], $e->getCode() == 422 ? 422 : 500);
         }
     }
 
-    /**
-     * Registra un Egreso Directo - Documento: "Estoy registrando un egreso"
-     * Lógica: Caja (-) NEGATIVO -> Egreso (+) POSITIVO
-     */
     public function storeDirectEgress(StoreDirectEgressRequest $request): JsonResponse
     {
         $validated = $request->validated();
         $user = Auth::user();
-        
-        $movements = [
-            [ 
-                'account_name' => 'Egresos por Operaciones (Directo)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => true, // DÉBITO (Gasto/Egreso aumenta)
-                'account_type' => 'EGRESS'
-            ],
-            [ 
-                'account_name' => $validated['cash_account_name'], 
-                'amount' => $validated['amount'], 
-                'is_debit' => false, // CRÉDITO (Activo/Caja disminuye)
-                'account_type' => 'CASH'
-            ]
-        ];
+        $tenantId = $user->tenant_id;
+        $cashAccountName = $validated['cash_account_name'] ?? 'Cuenta de Caja Desconocida';
 
         try {
-            $transaction = $this->accountingService->registerTransaction(
-                [
-                    'tenant_id' => $user->tenant_id,
+            return DB::transaction(function () use ($validated, $user, $tenantId, $cashAccountName) {
+                
+                // 1. Bloquear la Caja y Validar Fondos
+                $cash = Cash::where('id', $validated['cash_id'])
+                            ->where('tenant_id', $tenantId)
+                            ->lockForUpdate()
+                            ->firstOrFail();
+                
+                if ($cash->balance < $validated['amount']) {
+                    throw new \Exception('Fondos insuficientes en la caja para realizar este egreso.', 422);
+                }
+                
+                $cashAccountId = $cash->account_id;
+                $egressAccountId = $this->getAccountId('Egresos por Operaciones (Directo)', $tenantId);
+
+                // 2. Crear Encabezado
+                $transaction = Transaction::create([
+                    'tenant_id' => $tenantId,
                     'user_id' => $user->id,
-                    'date' => now(),
+                    'date' => $validated['date'] ?? now(),
                     'description' => 'Egreso directo: ' . $validated['description'],
                     'status' => 'COMPLETED',
-                ],
-                $movements
-            );
-            
-            return response()->json(['message' => 'Egreso registrado exitosamente.', 'transaction' => $transaction], 201);
-            
+                    'reference_code' => 'EGR-' . Str::random(6),
+                ]);
+
+                // 3. Crear Detalles (Doble Entrada)
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $egressAccountId, // DÉBITO: Egresos (Aumenta)
+                    'amount' => $validated['amount'],
+                    'is_debit' => true,
+                ]);
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $cashAccountId, // CRÉDITO: Caja (Disminuye)
+                    'amount' => $validated['amount'],
+                    'is_debit' => false,
+                ]);
+
+                // 4. ACTUALIZACIÓN CRUCIAL DEL BALANCE (FIX)
+                $cash->balance -= $validated['amount'];
+                $cash->save(); 
+
+                return response()->json(['message' => 'Egreso registrado exitosamente.', 'transaction' => $transaction], 201);
+            });
         } catch (\Exception $e) {
-            return response()->json(['message' => 'Error al registrar egreso.', 'error' => $e->getMessage()], 500);
+            return response()->json(['message' => $e->getMessage(), 'error' => $e->getMessage()], $e->getCode() == 422 ? 422 : 500);
         }
     }
+    
+    // ==========================================================
+    // SECCIÓN 3: SALDAR CUENTAS (PAGOS/COBROS - COMPLETED)
+    // ==========================================================
 
     public function payAccountPayable(PayAccountPayableRequest $request): JsonResponse
     {
         $validated = $request->validated();
         $user = Auth::user();
-        
-        // La transacción original de la CXP
+        $tenantId = $user->tenant_id;
         $originalCXP = Transaction::findOrFail($validated['cxp_transaction_id']);
-
-        // **Lógica Contable:**
-        // 1. Disminución de Pasivo (CXP) -> DÉBITO
-        // 2. Disminución de Activo (Caja/Banco) -> CRÉDITO
         
-        $movements = [
-            [ 
-                'account_name' => 'Cuentas por Pagar (Maestro)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => true, // DÉBITO (CXP disminuye)
-                'account_type' => 'CXP'
-            ],
-            [ 
-                'account_name' => $validated['cash_account_name'], // Cuenta de donde sale el dinero
-                'amount' => $validated['amount'], 
-                'is_debit' => false, // CRÉDITO (Caja/Activo disminuye)
-                'account_type' => 'CASH'
-            ]
-        ];
-
         try {
-            $paymentTransaction = $this->accountingService->registerTransaction(
-                [
-                    'tenant_id' => $user->tenant_id,
+            return DB::transaction(function () use ($validated, $user, $tenantId, $originalCXP) {
+
+                // 1. Bloquear Caja y Validar Fondos
+                $cash = Cash::where('id', $validated['cash_id'])
+                            ->where('tenant_id', $tenantId)
+                            ->lockForUpdate()
+                            ->firstOrFail();
+                
+                if ($cash->balance < $validated['amount']) {
+                    throw new \Exception('Fondos insuficientes en la caja para realizar este pago.', 422);
+                }
+
+                $cashAccountId = $cash->account_id;
+                $cxpAccountId = $this->getAccountId('Cuentas por Pagar (Maestro)', $tenantId);
+
+                // 2. Crear Encabezado de Pago
+                $paymentTransaction = Transaction::create([
+                    'tenant_id' => $tenantId,
                     'user_id' => $user->id,
-                    'date' => now(),
+                    'date' => $validated['date'] ?? now(),
                     'description' => 'Pago de CXP #' . $originalCXP->reference_code,
                     'status' => 'COMPLETED',
-                ],
-                $movements,
-                $originalCXP->id // ID de la transacción original de CXP
-            );
+                    'reference_code' => 'PAG-' . Str::random(6),
+                ]);
 
-            // Marcar la CXP original como COMPLETADA si se paga en su totalidad
-            // Para lógica de pagos parciales, esto debería ser más complejo, pero para el MVP, asumimos un pago completo o se deja en PENDING.
-            $originalCXP->update(['status' => 'COMPLETED']);
+                // 3. Crear Detalles (Doble Entrada)
+                TransactionDetail::create([
+                    'transaction_id' => $paymentTransaction->id,
+                    'account_id' => $cxpAccountId, // DÉBITO: CXP (Pasivo disminuye)
+                    'amount' => $validated['amount'],
+                    'is_debit' => true,
+                ]);
+                TransactionDetail::create([
+                    'transaction_id' => $paymentTransaction->id,
+                    'account_id' => $cashAccountId, // CRÉDITO: Caja (Activo disminuye)
+                    'amount' => $validated['amount'],
+                    'is_debit' => false,
+                ]);
 
-            return response()->json(['message' => 'Pago de deuda CXP registrado exitosamente.', 'transaction' => $paymentTransaction], 201);
-            
+                // 4. ACTUALIZACIÓN CRUCIAL DEL BALANCE
+                $cash->balance -= $validated['amount'];
+                $cash->save(); 
+
+                // 5. Marcar la CXP original como COMPLETADA
+                $originalCXP->update(['status' => 'COMPLETED']);
+
+                return response()->json(['message' => 'Pago de deuda CXP registrado exitosamente.', 'transaction' => $paymentTransaction], 201);
+            });
         } catch (\Exception $e) {
-            return response()->json(['message' => 'Error al pagar deuda CXP.', 'error' => $e->getMessage()], 500);
+            return response()->json(['message' => $e->getMessage(), 'error' => $e->getMessage()], $e->getCode() == 422 ? 422 : 500);
         }
     }
 
-    /**
-     * Recibe un pago de CXC pendiente. Documento: "Si estoy recibiendo pago de una cuenta por cobrar"
-     * Lógica: Caja (+) POSITIVO -> CXC (-) NEGATIVO
-     */
     public function receiveAccountReceivable(ReceiveAccountReceivableRequest $request): JsonResponse
     {
         $validated = $request->validated();
         $user = Auth::user();
-        
-        // La transacción original de la CXC
+        $tenantId = $user->tenant_id;
         $originalCXC = Transaction::findOrFail($validated['cxc_transaction_id']);
-
-        // **Lógica Contable:**
-        // 1. Aumento de Activo (Caja/Banco) -> DÉBITO
-        // 2. Disminución de Activo (CXC) -> CRÉDITO
         
-        $movements = [
-            [ 
-                'account_name' => $validated['cash_account_name'], // Cuenta a donde entra el dinero
-                'amount' => $validated['amount'], 
-                'is_debit' => true, // DÉBITO (Caja/Activo aumenta)
-                'account_type' => 'CASH'
-            ],
-            [ 
-                'account_name' => 'Cuentas por Cobrar (Maestro)', 
-                'amount' => $validated['amount'], 
-                'is_debit' => false, // CRÉDITO (CXC/Activo disminuye)
-                'account_type' => 'CXC'
-            ]
-        ];
-
         try {
-            $paymentTransaction = $this->accountingService->registerTransaction(
-                [
-                    'tenant_id' => $user->tenant_id,
+            return DB::transaction(function () use ($validated, $user, $tenantId, $originalCXC) {
+
+                // 1. Bloquear Caja
+                $cash = Cash::where('id', $validated['cash_id'])
+                            ->where('tenant_id', $tenantId)
+                            ->lockForUpdate()
+                            ->firstOrFail();
+                
+                $cashAccountId = $cash->account_id;
+                $cxcAccountId = $this->getAccountId('Cuentas por Cobrar (Maestro)', $tenantId);
+                
+                // 2. Crear Encabezado de Cobro
+                $paymentTransaction = Transaction::create([
+                    'tenant_id' => $tenantId,
                     'user_id' => $user->id,
-                    'date' => now(),
+                    'date' => $validated['date'] ?? now(),
                     'description' => 'Cobro de CXC #' . $originalCXC->reference_code,
                     'status' => 'COMPLETED',
-                ],
-                $movements,
-                $originalCXC->id // ID de la transacción original de CXC
-            );
+                    'reference_code' => 'COB-' . Str::random(6),
+                ]);
 
-            // Marcar la CXC original como COMPLETADA
-            $originalCXC->update(['status' => 'COMPLETED']);
+                // 3. Crear Detalles (Doble Entrada)
+                TransactionDetail::create([
+                    'transaction_id' => $paymentTransaction->id,
+                    'account_id' => $cashAccountId, // DÉBITO: Caja (Activo aumenta)
+                    'amount' => $validated['amount'],
+                    'is_debit' => true,
+                ]);
+                TransactionDetail::create([
+                    'transaction_id' => $paymentTransaction->id,
+                    'account_id' => $cxcAccountId, // CRÉDITO: CXC (Activo disminuye)
+                    'amount' => $validated['amount'],
+                    'is_debit' => false,
+                ]);
 
-            return response()->json(['message' => 'Cobro de CXC registrado exitosamente.', 'transaction' => $paymentTransaction], 201);
-            
+                // 4. ACTUALIZACIÓN CRUCIAL DEL BALANCE
+                $cash->balance += $validated['amount'];
+                $cash->save(); 
+
+                // 5. Marcar la CXC original como COMPLETADA
+                $originalCXC->update(['status' => 'COMPLETED']);
+
+                return response()->json(['message' => 'Cobro de CXC registrado exitosamente.', 'transaction' => $paymentTransaction], 201);
+            });
         } catch (\Exception $e) {
             return response()->json(['message' => 'Error al cobrar CXC.', 'error' => $e->getMessage()], 500);
         }

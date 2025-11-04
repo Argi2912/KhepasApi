@@ -35,7 +35,7 @@ class PermissionRoleSeeder extends Seeder
             'register cxc', 'receive cxc payment', 'register cxp', 'pay cxp debt', 'register direct ingress', 'register direct egress',
 
             // Funcionalidad de Caja y Divisas
-            'manage cashes', 'manage exchange rates', 'execute currency exchange',
+            'manage cashes', 'manage exchange rates', 'execute currency exchange', 'manage currencies',
             'start cash closure', 'end cash closure',
 
             // Módulo de Estadísticas

@@ -18,6 +18,7 @@ return new class extends Migration
             $table->foreignId('tenant_id')->constrained('tenants')->onDelete('cascade');
             $table->foreignId('account_id')->constrained('accounts')->onDelete('restrict');
             $table->string('name', 100);
+            $table->decimal('balance', 15, 4)->default(0);
             $table->timestamps();
         });
     }
