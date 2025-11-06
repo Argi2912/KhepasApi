@@ -3,12 +3,13 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\ExecuteExchangeRequest;
+use App\Http\Requests\ExecuteExchangeRequest; 
 use App\Models\ExchangeTransaction;
 use App\Models\Account;
 use App\Models\Cash;
 use App\Models\Transaction;
 use App\Models\TransactionDetail;
+use App\Models\ExchangeRate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -21,9 +22,6 @@ class ExchangeTransactionController extends Controller
         $this->middleware('permission:execute currency exchange');
     }
 
-    /**
-     * Helper para obtener el ID de una cuenta por su nombre.
-     */
     private function getAccountId(string $accountName, int $tenantId): int
     {
         $account = Account::where('name', $accountName)
@@ -31,185 +29,146 @@ class ExchangeTransactionController extends Controller
                           ->first();
     
         if (!$account) {
-            throw new \Exception("Error contable: La cuenta maestra '$accountName' no se encuentra registrada para el inquilino.", 422);
+            // Esto lanzará la excepción que ahora SÍ será capturada
+            throw new \Exception("Error contable: La cuenta maestra '$accountName' no se encuentra registrada.", 422);
         }
         
         return $account->id;
     }
 
-    /**
-     * Ejecuta una operación de intercambio de divisas, registrando el asiento contable.
-     * MODIFICACIÓN: Desglosa los movimientos brutos para la cuenta de caja compartida.
-     */
     public function executeExchange(ExecuteExchangeRequest $request): JsonResponse
     {
-        $validated = $request->validated();
-        $user = Auth::user();
-        $tenantId = $user->tenant_id;
-        
-        $rateObject = $request->input('exchange_rate_object'); 
-        $currencyGivenId = $request->input('currency_given_id');
-        $currencyReceivedId = $request->input('currency_received_id');
-
-        if (!$rateObject) {
-            return response()->json(['message' => 'Error interno: No se pudo determinar la tasa de cambio.'], 500);
-        }
-        
-        $amountGiven = (float) $validated['amount_given'];
-        $amountReceived = (float) $validated['amount_received'];
-        $fee = (float) ($validated['fee'] ?? 0);
-        $totalGivenCredit = $amountGiven + $fee; // Monto total que sale de la caja de origen
-
+        // --- INICIO DE LA CORRECCIÓN: 'try' envuelve TODO el método ---
         try {
-            return DB::transaction(function () use ($validated, $user, $tenantId, $rateObject, $currencyGivenId, $currencyReceivedId, $amountGiven, $amountReceived, $fee, $totalGivenCredit) {
+            $validated = $request->validated();
+            $user = Auth::user();
+            $tenantId = $user->tenant_id;
 
-                // 1. Bloquear Cajas y Validar Fondos
-                $cashGiven = Cash::with('account')
-                                 ->where('id', $validated['cash_given_id'])
-                                 ->where('tenant_id', $tenantId)
-                                 ->lockForUpdate()
-                                 ->firstOrFail();
-                
-                $cashReceived = Cash::with('account')
-                                    ->where('id', $validated['cash_received_id'])
-                                    ->where('tenant_id', $tenantId)
-                                    ->lockForUpdate()
-                                    ->firstOrFail();
+            // Objetos cargados eficientemente en el Request
+            $cashGiven = $request->get('cash_given_object');
+            $cashReceived = $request->get('cash_received_object');
+            $rateObject = $request->get('exchange_rate_object');
 
-                if ($cashGiven->balance < $totalGivenCredit) {
-                    throw new \Exception('Fondos insuficientes en la caja de origen.', 422);
-                }
+            // IDs de Cuentas Contables (maestras)
+            $cashAccountId = $cashGiven->account->id;
+            
+            // Estas llamadas ahora están dentro del try...catch
+            $providerCommAccountId = $this->getAccountId('Comisiones de Proveedores (Costo)', $tenantId);
+            $platformCommAccountId = $this->getAccountId('Comisiones de Plataforma (Costo)', $tenantId);
+            $companyCommAccountId = $this->getAccountId('Ingresos por Comisiones (KHEPAS)', $tenantId); // CORREGIDO: Nombre coincide con Seeder
 
-                // 2. Lógica Contable
-                $amountReceivedEquivalent = $amountReceived / $rateObject->rate;
-                $gainLoss = $amountReceivedEquivalent - $amountGiven; 
+            // Montos (ya calculados y validados en el Request)
+            $amountGiven = $validated['amount_given'];
+            $amountReceived = $request->get('amount_received'); // El neto * tasa
+            $providerAmount = $request->get('provider_amount');
+            $platformAmount = $request->get('platform_amount');
+            $companyAmount = $request->get('company_amount');
 
-                $cashGivenAccountId = $cashGiven->account_id;
-                $cashReceivedAccountId = $cashReceived->account_id;
-                $isCashAccountShared = ($cashGivenAccountId === $cashReceivedAccountId);
-                
-                // Nombres alineados con tu DB:
-                $feeAccountId = $fee > 0 ? $this->getAccountId('Ingresos por Comisiones', $tenantId) : null;
-                $gainLossAccountId = null;
+            // Usamos DB::transaction para asegurar atomicidad
+            return DB::transaction(function () use (
+                $validated, $user, $tenantId, $cashGiven, $cashReceived, $rateObject, $cashAccountId,
+                $providerCommAccountId, $platformCommAccountId, $companyCommAccountId,
+                $amountGiven, $amountReceived, $providerAmount, $platformAmount, $companyAmount
+            ) {
 
-                if ($gainLoss != 0) {
-                    $accountName = $gainLoss > 0 ? 'Ganancia por Tasa de Cambio' : 'Pérdida por Tasa de Cambio';
-                    $gainLossAccountId = $this->getAccountId($accountName, $tenantId);
-                }
-                
-                // ... (Validaciones Defensivas se mantienen)
-
-
-                // 3. Crear Encabezado de Transacción
+                // 1. Crear la Transacción (Asiento General)
                 $transaction = Transaction::create([
                     'tenant_id' => $tenantId,
                     'user_id' => $user->id,
-                    'date' => $validated['date'] ?? now(),
-                    'description' => $validated['description'] ?? 'Intercambio de divisas (Asiento desglosado/consolidado)',
+                    'date' => $validated['date'],
+                    'description' => $validated['description'] ?? 'Intercambio de divisa',
+                    'reference_code' => 'EXC-' . Str::random(8),
                     'status' => 'COMPLETED',
-                    'reference_code' => 'EXC-' . Str::random(6),
                 ]);
 
-                // 4. Acumular Detalles (Asientos)
-                $accountMovements = [];
-
-                $recordMovement = function ($accountId, $amount, $isDebit) use (&$accountMovements) {
-                    if ($amount <= 0 || !$accountId) return; 
-
-                    $amountCents = (int) round($amount * 100);
-                    $sign = $isDebit ? 1 : -1;
-                    
-                    if (!isset($accountMovements[$accountId])) {
-                        $accountMovements[$accountId] = 0;
-                    }
-                    
-                    $accountMovements[$accountId] += $amountCents * $sign;
-                };
-
-                // A. MOVIMIENTOS DE CAJA (Se registrarán por separado si se comparten, sino se consolidan)
-                $recordMovement($cashGivenAccountId, $totalGivenCredit, false); // CRÉDITO: Salida total
-                $recordMovement($cashReceivedAccountId, $amountReceivedEquivalent, true); // DÉBITO: Entrada equivalente
-
-                // B. GASTO POR COMISIÓN (DÉBITO)
-                if ($fee > 0 && $feeAccountId) {
-                    $recordMovement($feeAccountId, $fee, true);
-                }
-
-                // C. BALANCEAR ASIENTO (Ganancia o Pérdida)
-                if ($gainLoss > 0) {
-                    $recordMovement($gainLossAccountId, $gainLoss, false); // Ganancia: CRÉDITO
-                } elseif ($gainLoss < 0) {
-                    $recordMovement($gainLossAccountId, abs($gainLoss), true); // Pérdida: DÉBITO
-                }
-
-                // ==========================================================
-                // 5. INSERCIÓN DE DETALLES: Separando Caja de otras cuentas
-                // ==========================================================
+                // 2. Asiento Contable (Doble Partida)
                 
-                // Si la cuenta es compartida, insertamos los movimientos brutos de caja primero
-                if ($isCashAccountShared) {
-                     // 5.1. Desglose de Caja para ver el flujo bruto
-                     
-                     // DÉBITO: Entrada (equivalente) 
+                // 2a. CRÉDITO (Salida) de la Caja Maestra
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $cashAccountId,
+                    'amount' => $amountGiven, // Sale el total
+                    'is_debit' => false,
+                ]);
+
+                // 2b. DÉBITO (Entrada) a la Caja Maestra
+                TransactionDetail::create([
+                    'transaction_id' => $transaction->id,
+                    'account_id' => $cashAccountId,
+                    'amount' => $amountReceived, // Entra el neto convertido
+                    'is_debit' => true,
+                ]);
+
+                // 2c. DÉBITOS (Costos) de Comisiones
+                if ($providerAmount > 0) {
                     TransactionDetail::create([
                         'transaction_id' => $transaction->id,
-                        'account_id' => $cashReceivedAccountId,
-                        'amount' => $amountReceivedEquivalent, // Monto Bruto de Entrada (ej: 8.00)
+                        'account_id' => $providerCommAccountId,
+                        'amount' => $providerAmount,
                         'is_debit' => true,
                     ]);
-                     // CRÉDITO: Salida (total)
-                    TransactionDetail::create([
-                        'transaction_id' => $transaction->id,
-                        'account_id' => $cashGivenAccountId, 
-                        'amount' => $totalGivenCredit, // Monto Bruto de Salida (ej: 8.12)
-                        'is_debit' => false,
-                    ]);
-                    
-                    // Eliminamos el ID de la caja del array de movimientos para que no se procese más.
-                    unset($accountMovements[$cashGivenAccountId]);
                 }
-
-                // 5.2. Insertar el resto de los movimientos consolidados (Comisión, Ganancia/Pérdida)
-                foreach ($accountMovements as $accountId => $netMovementCents) {
-                    // Si el neto es cero (ej: si la comisión o gainLoss fueran 0), lo saltamos.
-                    if ($netMovementCents === 0) continue; 
-
-                    // Registramos el movimiento neto de las cuentas de Gasto/Ingreso.
-                    $isDebit = $netMovementCents > 0;
-                    $amount = abs($netMovementCents) / 100;
-
+                if ($platformAmount > 0) {
                     TransactionDetail::create([
                         'transaction_id' => $transaction->id,
-                        'account_id' => $accountId,
-                        'amount' => $amount,
-                        'is_debit' => $isDebit,
+                        'account_id' => $platformCommAccountId,
+                        'amount' => $platformAmount,
+                        'is_debit' => true,
                     ]);
                 }
 
-                // 6. ACTUALIZACIÓN CRUCIAL DE BALANCES DE CAJA (Movimiento real de divisas)
-                $cashGiven->balance -= $totalGivenCredit;
+                // 2d. CRÉDITO (Ingreso) de Comisión KHEPAS
+                if ($companyAmount > 0) {
+                     TransactionDetail::create([
+                        'transaction_id' => $transaction->id,
+                        'account_id' => $companyCommAccountId,
+                        'amount' => $companyAmount,
+                        'is_debit' => false, // Ingreso aumenta por el Crédito
+                    ]);
+                }
+
+                // 3. ACTUALIZACIÓN CRUCIAL DE BALANCES DE CAJA
+                $cashGiven->balance -= $amountGiven;
                 $cashReceived->balance += $amountReceived;
                 $cashGiven->save();
                 $cashReceived->save();
 
-                // 7. Registrar el Detalle del Intercambio (Trazabilidad)
+                // 4. Registrar el Detalle del Intercambio (Trazabilidad)
                 $exchangeDetail = ExchangeTransaction::create([
                     'transaction_id' => $transaction->id,
                     'exchange_rate_id' => $rateObject->id,
-                    'currency_given_id' => $currencyGivenId,
-                    'currency_received_id' => $currencyReceivedId,
-                    'amount_given' => $amountGiven,
-                    'amount_received' => $amountReceived,
-                    'fee' => $fee,
+                    'customer_user_id' => $validated['customer_user_id'],
+                    'provider_user_id' => $validated['provider_user_id'] ?? null,
+                    'broker_user_id' => $validated['broker_user_id'],
+                    
+                    'currency_given_id'    => $request->get('currency_given_id'),
+                    'currency_received_id' => $request->get('currency_received_id'),
+                    
+                    'amount_given'         => $amountGiven,
+                    'net_amount_converted' => $request->get('net_amount_to_convert'),
+                    'amount_received'      => $amountReceived,
+                    'effective_rate'       => $request->get('effective_rate'),
+                    
+                    'commission_provider_percentage' => $validated['commission_provider_percentage'],
+                    'commission_provider_amount'     => $request->get('provider_amount'),
+                    
+                    'commission_platform_percentage' => $validated['commission_platform_percentage'],
+                    'commission_platform_amount'     => $request->get('platform_amount'),
+                    
+                    'commission_company_percentage'  => $validated['commission_company_percentage'],
+                    'commission_company_amount'      => $request->get('company_amount'),
+                    
+                    'total_commission_expense_amount' => $request->get('total_expense_commissions'),
                 ]);
 
                 return response()->json([
-                    'message' => 'Operación de intercambio y comisión registradas exitosamente.', 
+                    'message' => 'Operación de intercambio registrada exitosamente.', 
                     'transaction' => $transaction->load('details'),
                     'detail' => $exchangeDetail
                 ], 201);
-
             });
+
+        // --- FIN DE LA CORRECCIÓN: 'catch' captura cualquier excepción previa ---
         } catch (\Exception $e) {
             $statusCode = $e->getCode() == 422 ? 422 : 500;
             return response()->json([

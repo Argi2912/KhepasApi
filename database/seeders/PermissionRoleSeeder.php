@@ -6,6 +6,7 @@ use Illuminate\Database\Console\Seeds\WithoutModelEvents;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar; // Importante
 
 class PermissionRoleSeeder extends Seeder
 {
@@ -16,6 +17,9 @@ class PermissionRoleSeeder extends Seeder
      */
     public function run()
     {
+        // Reset cached roles and permissions
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
+
         // --- 1. Definición de Permisos (Nuevos y Reclasificados) ---
         $permissions = [
             // Módulo Home (Vista General)
@@ -41,31 +45,31 @@ class PermissionRoleSeeder extends Seeder
             // Módulo de Estadísticas
             'view statistics dashboard', // Acceso a la página 5
             
-            // Usuarios, Roles y Configuración
-            'manage users', 'manage roles', 'view reports', 'manage system settings',
-            'super admin access'
+            // Permisos de Administración del Sistema
+            'manage users', 'manage roles', 'manage system settings'
         ];
-
+        
         foreach ($permissions as $permission) {
             Permission::findOrCreate($permission, 'api');
         }
 
-        // --- 2. Definición de Roles (Incluyendo Cliente, Proveedor y Corredor) ---
+        // --- 2. Definición de Roles (Guard 'api') ---
 
-        // Rol 1: Super Administrador (Sistema completo)
+        // Rol 1: Super Admin (Acceso Total)
         $superAdminRole = Role::findOrCreate('Super Admin', 'api');
         $superAdminRole->givePermissionTo(Permission::all());
 
-        // Rol 2: Administrador del Tenant
-        $tenantAdminRole = Role::findOrCreate('Tenant Admin', 'api');
-        $tenantAdminRole->givePermissionTo([
-            'view home dashboard', 'view requests', 'create request', 'edit request',
+        // Rol 2: Administrador del Tenant (Acceso Total de Gestión)
+        $adminRole = Role::findOrCreate('Tenant Admin', 'api');
+        $adminRole->givePermissionTo([
+            'view home dashboard',
+            'view requests', 'create request', 'edit request', 'delete request',
             'view entity databases', 'manage client entity', 'manage provider entity', 'manage broker entity', 'manage administrator entity',
             'register cxc', 'receive cxc payment', 'register cxp', 'pay cxp debt', 'register direct ingress', 'register direct egress',
             'manage cashes', 'manage exchange rates', 'execute currency exchange',
             'start cash closure', 'end cash closure',
             'view statistics dashboard',
-            'manage users', 'manage roles', 'manage system settings'
+            'manage users', 'manage roles'
         ]);
         
         // Rol 3: Corredor (Broker)
@@ -73,7 +77,7 @@ class PermissionRoleSeeder extends Seeder
         $brokerRole->givePermissionTo([
             'view home dashboard',
             'view requests', 'create request', 
-            'register cxc', 'receive cxc payment', // Podría registrar CXC por comisiones
+            'register cxc', // Podría registrar CXC por comisiones
             'execute currency exchange',
         ]);
         
@@ -89,7 +93,6 @@ class PermissionRoleSeeder extends Seeder
         $providerRole->givePermissionTo([
             'view home dashboard', // Solo cuentas por pagar a él
             'view requests', // Solo solicitudes de pago a él
-            'register cxp', // Podría registrar una factura
         ]);
     }
 }

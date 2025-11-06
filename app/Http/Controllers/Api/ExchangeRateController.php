@@ -10,18 +10,16 @@ use App\Models\ExchangeTransaction;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Carbon; // Importar Carbon
 
 class ExchangeRateController extends Controller
 {
     public function __construct()
     {
-        // Solo usuarios con permiso para gestionar tasas pueden acceder
         $this->middleware('permission:manage exchange rates');
     }
 
-    /**
-     * Muestra una lista de tasas de cambio históricas y activas.
-     */
+    // ... (index, store, show, update, destroy se mantienen igual) ...
     public function index(Request $request): JsonResponse
     {
         $query = ExchangeRate::with(['fromCurrency', 'toCurrency'])
@@ -35,80 +33,68 @@ class ExchangeRateController extends Controller
             $query->where('from_currency_id', $request->from_currency_id);
         }
         
-        // La búsqueda tipo datatable puede ser más compleja, pero este filtro es clave
-        
         $perPage = $request->get('per_page', 20);
         $rates = $query->paginate($perPage);
         
         return response()->json($rates);
     }
 
-    /**
-     * Almacena una nueva tasa de cambio.
-     */
     public function store(StoreExchangeRateRequest $request): JsonResponse
     {
         $rate = ExchangeRate::create($request->validated());
         return response()->json(['message' => 'Tasa de cambio registrada.', 'rate' => $rate], 201);
     }
 
-    /**
-     * Muestra el detalle de una tasa específica.
-     */
     public function show(ExchangeRate $exchangeRate): JsonResponse
     {
         return response()->json($exchangeRate->load(['fromCurrency', 'toCurrency']));
     }
 
-    /**
-     * Actualiza la tasa de cambio (generalmente solo el valor 'rate').
-     */
     public function update(UpdateExchangeRateRequest $request, ExchangeRate $exchangeRate): JsonResponse
     {
         $exchangeRate->update($request->validated());
         return response()->json(['message' => 'Tasa de cambio actualizada.', 'rate' => $exchangeRate]);
     }
 
-    /**
-     * Elimina una tasa de cambio.
-     */
     public function destroy(ExchangeRate $exchangeRate): JsonResponse
     {
-        // --- 2. VALIDACIÓN DE NEGOCIO ---
-        // (Basado en el modelo ExchangeTransaction.php)
         if (ExchangeTransaction::where('exchange_rate_id', $exchangeRate->id)->exists()) {
              return response()->json([
-                'message' => 'No se puede eliminar: La tasa está siendo usada en operaciones de intercambio.'
+               'message' => 'No se puede eliminar: La tasa está siendo usada en operaciones de intercambio.'
              ], 422);
         }
-        // ---------------------------------
         
         $exchangeRate->delete();
         return response()->json(['message' => 'Tasa de cambio eliminada.']);
     }
 
+
     /**
-     * Obtiene la tasa de cambio más reciente para un par de divisas.
+     * Obtiene la tasa de cambio más reciente para un par de divisas y una fecha.
+     * (MODIFICADO PARA INCLUIR LA FECHA)
      */
     public function getLatestRate(Request $request): \Illuminate\Http\JsonResponse
     {
+        // --- INICIO DE LA CORRECCIÓN ---
+        // 1. Añadir 'date' a la validación
         $validated = $request->validate([
             'from_currency_id' => 'required|exists:currencies,id',
             'to_currency_id'   => 'required|exists:currencies,id|different:from_currency_id',
+            'date'             => 'required|date_format:Y-m-d', // Validar la fecha
         ]);
 
         $rate = ExchangeRate::where('tenant_id', Auth::user()->tenant_id)
                             ->where('from_currency_id', $validated['from_currency_id'])
                             ->where('to_currency_id', $validated['to_currency_id'])
-                            ->latest('date') // La más reciente
-                            // --- INICIO DE LA CORRECCIÓN ---
-                            // Usar los nombres de los métodos (camelCase)
+                            // 2. Usar la fecha para buscar la tasa correcta
+                            ->whereDate('date', '<=', $validated['date']) 
+                            ->latest('date') // La más reciente (en o antes de la fecha dada)
                             ->with(['fromCurrency', 'toCurrency']) 
-                            // --- FIN DE LA CORRECCIÓN ---
                             ->first();
+        // --- FIN DE LA CORRECCIÓN --- (Esta es la línea 84-91 aprox)
 
         if (!$rate) {
-            return response()->json(['message' => 'No se encontró una tasa de cambio para este par.'], 404);
+            return response()->json(['message' => 'No se encontró una tasa de cambio para este par en la fecha seleccionada (o anterior).'], 404);
         }
 
         return response()->json($rate);

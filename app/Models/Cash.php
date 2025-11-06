@@ -13,7 +13,7 @@ class Cash extends Model
     protected $fillable = ['tenant_id', 'account_id', 'currency_id', 'name', 'balance'];
 
     protected $casts = [
-        'balance' => 'decimal:2',
+        'balance' => 'decimal:4',
     ];
 
     // Relación N:1 con Tenant
