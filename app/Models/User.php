@@ -1,37 +1,38 @@
 <?php
+
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
-use Laravel\Sanctum\HasApiTokens;
-use Spatie\Permission\Traits\HasRoles;
-use Tymon\JWTAuth\Contracts\JWTSubject;
+use Tymon\JWTAuth\Contracts\JWTSubject; // IMPORTAR
+use Spatie\Permission\Traits\HasRoles; // IMPORTAR
+use App\Models\Tenant; // IMPORTAR
+use Illuminate\Database\Eloquent\Relations\BelongsTo; // IMPORTAR
+use Spatie\Activitylog\LogOptions;
 
 class User extends Authenticatable implements JWTSubject
 {
-    use HasApiTokens, HasFactory, Notifiable, HasRoles;
+    /** @use HasFactory<\Database\Factories\UserFactory> */
+    use HasFactory, Notifiable, HasRoles;
 
     /**
      * The attributes that are mass assignable.
      *
-     * @var array<int, string>
+     * @var list<string>
      */
-    protected $guard_name = 'api';
-    protected $fillable   = [
-        'first_name',
-        'last_name',
-        'phone_number',
-        'tenant_id', 
+    protected $fillable = [
+        'name',
         'email',
         'password',
+        'tenant_id'
     ];
 
     /**
      * The attributes that should be hidden for serialization.
      *
-     * @var array<int, string>
+     * @var list<string>
      */
     protected $hidden = [
         'password',
@@ -39,37 +40,47 @@ class User extends Authenticatable implements JWTSubject
     ];
 
     /**
-     * The attributes that should be cast.
+     * Get the attributes that should be cast.
      *
-     * @var array<string, string>
+     * @return array<string, string>
      */
-    protected $casts = [
-        'email_verified_at' => 'datetime',
-    ];
+    protected function casts(): array
+    {
+        return [
+            'email_verified_at' => 'datetime',
+            'password' => 'hashed',
+        ];
+    }
 
-    public function tenant()
+    // Relación con Tenant
+    public function tenant(): BelongsTo
     {
         return $this->belongsTo(Tenant::class);
     }
 
-    /**
-     * Get the identifier that will be stored in the subject claim of the JWT.
-     *
-     * @return mixed
-     */
+    // --- MÉTODOS REQUERIDOS POR JWT ---
     public function getJWTIdentifier()
     {
         return $this->getKey();
     }
 
-    /**
-     * Return a key value array, containing any custom claims to be added to the JWT.
-     *
-     * @return array
-     */
     public function getJWTCustomClaims()
     {
-        return [];
+        return [
+            'tenant_id' => $this->tenant_id, // Añadimos el tenant_id al token
+        ];
     }
 
+    //--- Métodos de ActivityLog ---
+
+    /**
+     * @return \Spatie\Activitylog\LogOptions
+     */
+    public function getActivitylogOptions(): LogOptions
+    {
+        return LogOptions::defaults()
+            ->logOnly(['name', 'email', 'tenant_id'])
+            ->logOnlyDirty() // Solo loguea si algo cambió
+            ->setDescriptionForEvent(fn(string $eventName) => "Usuario {$this->email} fue {$eventName}");
+    }
 }

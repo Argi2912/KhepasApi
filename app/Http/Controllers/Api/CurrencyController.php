@@ -1,113 +1,66 @@
 <?php
-
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Currency;
-use App\Http\Requests\StoreCurrencyRequest;
-use App\Http\Requests\UpdateCurrencyRequest;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-
+use Illuminate\Validation\Rule;
 
 class CurrencyController extends Controller
 {
-    public function __construct()
+    public function index(Request $request)
     {
-        $this->middleware('permission:manage exchange rates');
-    }
+        $currencies = Currency::query()
+            ->when($request->search, function ($query, $search) {
+                $query->where('code', 'like', "%{$search}%")
+                    ->orWhere('name', 'like', "%{$search}%");
+            })
+            ->orderBy('code', 'asc')
+            ->paginate(15)
+            ->withQueryString();
 
-    /**
-     * Muestra la lista de divisas.
-     */
-    public function index(Request $request): JsonResponse
-    {
-        // Si no se pide paginación, devolver listado para dropdowns
-        if ($request->missing('page') && $request->missing('per_page')) {
-            return response()->json(
-                Currency::where('is_active', true)
-                       ->orderBy('is_base', 'desc')
-                       ->orderBy('name', 'asc')
-                       ->get()
-            );
-        }
-
-        // Paginado para el CRUD
-        $query = Currency::latest();
-
-        if ($request->filled('search')) {
-            $searchTerm = '%' . $request->search . '%';
-            $query->where('name', 'like', $searchTerm)
-                  ->orWhere('code', 'like', $searchTerm)
-                  ->orWhere('symbol', 'like', $searchTerm);
-        }
-        
-        $perPage = $request->get('per_page', 20);
-        $currencies = $query->paginate($perPage);
-        
         return response()->json($currencies);
     }
 
-    /**
-     * Almacena una nueva divisa.
-     */
-    public function store(StoreCurrencyRequest $request): JsonResponse
+    public function store(Request $request)
     {
-        $validatedData = $request->validated();
+        $validated = $request->validate([
+            // La validación se hace contra la clave primaria 'code'
+            'code' => ['required', 'string', 'bail', Rule::unique('currencies', 'code')],
+            'name' => ['required', 'string', 'max:50', 'bail', Rule::unique('currencies', 'name')],
+        ]);
 
-        // LÓGICA DE NEGOCIO: Si esta es la nueva base, desmarcar la anterior.
-        if (isset($validatedData['is_base']) && $validatedData['is_base'] === true) {
-            Currency::where('is_base', true)->update(['is_base' => false]);
-        }
+        $currency = Currency::create($validated);
 
-        $currency = Currency::create($validatedData);
-        return response()->json(['message' => 'Divisa creada exitosamente.', 'currency' => $currency], 201);
+        return response()->json($currency, 201);
     }
 
-    /**
-     * Muestra una divisa específica.
-     */
-    public function show(Currency $currency): JsonResponse
+    public function show(Currency $currency)
     {
         return response()->json($currency);
     }
 
-    /**
-     * Actualiza una divisa.
-     */
-    public function update(UpdateCurrencyRequest $request, Currency $currency): JsonResponse
+    public function update(Request $request, Currency $currency)
     {
-        $validatedData = $request->validated();
+        $validated = $request->validate([
+            // Solo se permite actualizar el nombre
+            'name' => ['required', 'string', 'max:50', Rule::unique('currencies', 'name')->ignore($currency->code, 'code')],
+        ]);
 
-        // LÓGICA DE NEGOCIO: Si esta es la nueva base, desmarcar la anterior.
-        if (isset($validatedData['is_base']) && $validatedData['is_base'] === true) {
-            // Desmarcar cualquier otra moneda que sea base
-            Currency::where('is_base', true)
-                    ->where('id', '!=', $currency->id)
-                    ->update(['is_base' => false]);
-        }
+        $currency->update($validated);
 
-        $currency->update($validatedData);
-        return response()->json(['message' => 'Divisa actualizada.', 'currency' => $currency]);
+        return response()->json($currency);
     }
 
-    /**
-     * Elimina una divisa.
-     */
-    public function destroy(Currency $currency): JsonResponse
+    public function destroy(Currency $currency)
     {
-        // VALIDACIÓN: No se puede eliminar la moneda base
-        if ($currency->is_base) {
-            return response()->json(['message' => 'No se puede eliminar la divisa base del sistema.'], 422);
+        // 🚨 Impedir la eliminación si la divisa está en uso
+        if ($currency->accounts()->exists() || $currency->exchangeRatesFrom()->exists() || $currency->exchangeRatesTo()->exists()) {
+            return response()->json(['message' => 'No se puede eliminar la divisa. Está en uso por cuentas, tasas o transacciones.'], 409);
         }
 
-        // VALIDACIÓN: No se puede eliminar si está en uso (Ej. en Exchange Rates o Cajas)
-        // (Asumiendo que ExchangeRate tiene relaciones 'fromCurrency' y 'toCurrency')
-        if ($currency->exchangeRatesFrom()->exists() || $currency->exchangeRatesTo()->exists()) {
-             return response()->json(['message' => 'No se puede eliminar: La divisa está siendo usada en tasas de cambio.'], 422);
-        }
-        
         $currency->delete();
-        return response()->json(['message' => 'Divisa eliminada.']);
+
+        return response()->json(null, 204);
     }
 }

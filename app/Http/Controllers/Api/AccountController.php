@@ -4,64 +4,74 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
-use Illuminate\Http\Request;
+use Illuminate\Http\Request; // Reemplaza con Form Requests
 
 class AccountController extends Controller
 {
-    /**
-     * Display a listing of the resource.
-     *
-     * @return \Illuminate\Http\Response
-     */
-    public function index()
+    public function index(Request $request)
     {
-       return Account::where('is_active', true)
-                      ->orderBy('name', 'asc')
-                      ->get(['id', 'name', 'type']); 
+        $request->validate([
+            'currency_code' => 'nullable|string|size:3',
+            'start_date' => 'nullable|date_format:Y-m-d',
+            'end_date' => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
+            // 'search' => 'nullable|string|max:100' // <-- Si añades scopeSearch
+        ]);
+
+        $query = Account::query();
+
+        $query->when($request->currency_code, function ($q, $code) {
+            return $q->currencyCode($code); // Llama al scopeCurrencyCode()
+        });
+
+        // $query->when($request->search, function ($q, $term) {
+        //     return $q->search($term); 
+        // });
+
+        $query->when($request->start_date, function ($q, $date) {
+            return $q->fromDate($date);
+        });
+
+        $query->when($request->end_date, function ($q, $date) {
+            return $q->toDate($date);
+        });
+
+        return $query->latest()->paginate(15)->withQueryString();
     }
 
-    /**
-     * Store a newly created resource in storage.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\Response
-     */
     public function store(Request $request)
     {
-        //
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'currency_code' => 'required|string|size:3',
+            'balance' => 'required|numeric|min:0',
+        ]);
+        
+        $account = Account::create($validated);
+        
+        return response()->json($account, 201);
     }
 
-    /**
-     * Display the specified resource.
-     *
-     * @param  int  $id
-     * @return \Illuminate\Http\Response
-     */
-    public function show($id)
+    public function show(Account $account)
     {
-        //
+        return $account;
     }
 
-    /**
-     * Update the specified resource in storage.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @param  int  $id
-     * @return \Illuminate\Http\Response
-     */
-    public function update(Request $request, $id)
+    public function update(Request $request, Account $account)
     {
-        //
+        $validated = $request->validate([
+            'name' => 'sometimes|required|string|max:255',
+            'currency_code' => 'sometimes|required|string|size:3',
+            'balance' => 'sometimes|required|numeric|min:0', // Usar un endpoint dedicado para ajustar balance es mejor
+        ]);
+        
+        $account->update($validated);
+        
+        return response()->json($account);
     }
 
-    /**
-     * Remove the specified resource from storage.
-     *
-     * @param  int  $id
-     * @return \Illuminate\Http\Response
-     */
-    public function destroy($id)
+    public function destroy(Account $account)
     {
-        //
+        $account->delete();
+        return response()->noContent();
     }
 }

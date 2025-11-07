@@ -1,143 +1,131 @@
 <?php
 
 use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\AuditLogController;
+
+/*
+|--------------------------------------------------------------------------
+| Controladores de Autenticación y Superadmin
+|--------------------------------------------------------------------------
+*/
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\CashController;
+use App\Http\Controllers\Api\BrokerController;
+use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\CurrencyController;
+/*
+|--------------------------------------------------------------------------
+| Controladores del Tenant (Cartera y Cuentas)
+|--------------------------------------------------------------------------
+*/
+use App\Http\Controllers\Api\CurrencyExchangeController;
+use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\DollarPurchaseController;
 use App\Http\Controllers\Api\ExchangeRateController;
-use App\Http\Controllers\Api\ExchangeTransactionController;
-use App\Http\Controllers\Api\StatsController;
-use App\Http\Controllers\Api\TransactionController;
-use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\Api\LedgerEntryController;
+/*
+|--------------------------------------------------------------------------
+| Controladores del Tenant (Lógica de Negocio y Transacciones)
+|--------------------------------------------------------------------------
+*/
+use App\Http\Controllers\Api\ProviderController;
+use App\Http\Controllers\Api\StatisticsController;
+use App\Http\Controllers\Api\Superadmin\TenantController;
+use App\Http\Controllers\Api\Superadmin\TenantUserController as SuperadminTenantUserController;
+
+/*
+|--------------------------------------------------------------------------
+| Controladores del Tenant (Dashboards y Auditoría)
+|--------------------------------------------------------------------------
+*/
+use App\Http\Controllers\Api\TenantUserController;
 use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
-| API Routes
+| 1. RUTAS PÚBLICAS
 |--------------------------------------------------------------------------
 |
-| Rutas API versionadas bajo el prefijo /v1.
+| Rutas para autenticación.
 |
 */
+Route::post('login', [AuthController::class, 'login']);
 
-Route::prefix('v1')->group(function () {
+/*
+|--------------------------------------------------------------------------
+| 2. RUTAS DE SUPERADMIN
+|--------------------------------------------------------------------------
+|
+| Rutas protegidas para el rol 'superadmin'.
+| Estas rutas NO están filtradas por el TenantScope.
+|
+*/
+Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'superadmin'], function () {
+    // Gestiona los Tenants (CRUD completo)
+    Route::apiResource('tenants', TenantController::class);
 
-    // =========================================================
-    // 1. MÓDULO DE AUTENTICACIÓN (Rutas Públicas)
-    // Prefijo: /api/v1/auth
-    // =========================================================
-    Route::prefix('auth')->controller(AuthController::class)->group(function () {
-        Route::post('register', 'register');
-        Route::post('login', 'login');
+                                                                                             // Crea el primer usuario (admin) para un Tenant
+    Route::post('tenants/{tenant}/users', [SuperadminTenantUserController::class, 'store']); // 🚨 USAMOS EL ALIAS
+});
 
-        // Rutas de Auth que requieren estar autenticado
-        Route::middleware('auth:api')->group(function () {
-            Route::post('updateProfile', 'updateProfile');
-            Route::post('logout', 'logout');
-            Route::post('refresh', 'refresh');
-            Route::get('me', 'me');
-        });
-    });
+/*
+|--------------------------------------------------------------------------
+| 3. RUTAS DEL TENANT (AUTENTICADAS)
+|--------------------------------------------------------------------------
+|
+| Rutas protegidas por 'auth:api'. El TenantScope se aplica
+| automáticamente a todos los modelos que usan el trait BelongsToTenant.
+|
+*/
+Route::group(['middleware' => ['auth:api']], function () {
 
-    // =========================================================
-    // 2. GRUPO DE RUTAS PROTEGIDAS (Requieren Token 'auth:api')
-    // =========================================================
-    Route::middleware('auth:api')->group(function () {
+    // --- Autenticación y Perfil ---
+    Route::post('logout', [AuthController::class, 'logout']);
+    Route::get('me', [AuthController::class, 'me']);
+    Route::post('refresh', [AuthController::class, 'refresh']);
 
-        // ---------------------------------------------------------
-        // MÓDULO DE USUARIOS (Clientes, Proveedores, etc.)
-        // Prefijo: /api/v1/users
-        // ---------------------------------------------------------
-        Route::apiResource('users', UserController::class);
+    // --- Módulo 1: Home (Dashboard) ---
+    Route::get('dashboard/summary', [DashboardController::class, 'getSummary'])
+        ->middleware('permission:view_dashboard');
 
-        // ---------------------------------------------------------
-        // MÓDULO DE CUENTAS CONTABLES
-        // Prefijo: /api/v1/accounts
-        // ---------------------------------------------------------
-        Route::apiResource('accounts', AccountController::class);
-        
-        // ---------------------------------------------------------
-        // MÓDULO DE DIVISAS
-        // Prefijo: /api/v1/currencies
-        // ---------------------------------------------------------
-        Route::apiResource('currencies', CurrencyController::class);
+    // --- Módulo 5: Estadísticas ---
+    Route::get('statistics/performance', [StatisticsController::class, 'getPerformance'])
+        ->middleware('permission:view_statistics');
 
-        // ---------------------------------------------------------
-        // MÓDULO DE TASAS DE CAMBIO
-        // Prefijo: /api/v1/exchange-rates
-        // ---------------------------------------------------------
-        Route::prefix('exchange-rates')->controller(ExchangeRateController::class)->group(function () {
-            // !! IMPORTANTE: Ruta específica 'latest' DEBE ir ANTES de la ruta genérica '{id}'
-            Route::get('latest', 'getLatestRate');
-            
-            // Rutas CRUD (reemplaza a apiResource para ordenar 'latest' primero)
-            Route::get('/', 'index');
-            Route::post('/', 'store');
-            Route::get('/{exchange_rate}', 'show'); // {exchange_rate} es el comodín
-            Route::put('/{exchange_rate}', 'update');
-            Route::delete('/{exchange_rate}', 'destroy');
-        });
+    // --- Módulo 4: Bases de Datos (Cartera y Cuentas) ---
+    // (Estas rutas son usadas por el Módulo 3 para los <select>)
+    Route::apiResource('clients', ClientController::class);
+    Route::apiResource('providers', ProviderController::class);
+    Route::apiResource('brokers', BrokerController::class);
+    Route::apiResource('accounts', AccountController::class);
 
-        // ---------------------------------------------------------
-        // MÓDULO DE CAJAS (Cashes) Y CIERRES
-        // Prefijo: /api/v1/cashes
-        // ---------------------------------------------------------
-        Route::prefix('cashes')->controller(CashController::class)->group(function () {
-            // Rutas de Cierre de Caja
-            Route::post('closure/start', 'startClosure')->middleware('permission:start cash closure');
-            Route::post('closure/end', 'endClosure')->middleware('permission:end cash closure');
-            
-            // Rutas CRUD para Cajas (apiResource movido aquí para agrupar)
-            Route::get('/', 'index');
-            Route::post('/', 'store');
-            Route::get('/{cash}', 'show');
-            Route::put('/{cash}', 'update');
-            Route::delete('/{cash}', 'destroy');
-        });
+    // --- Módulo 3: Solicitudes (Transacciones) ---
+    Route::apiResource('transactions/currency-exchange', CurrencyExchangeController::class)
+        ->only(['index', 'show', 'store'])
+        ->middleware('permission:manage_requests'); // 'index' y 'show' podrían tener 'view_database_history'
 
-        // ---------------------------------------------------------
-        // MÓDULO DE TRANSACCIONES (Generales e Intercambios)
-        // Prefijo: /api/v1/transactions
-        // ---------------------------------------------------------
-        Route::prefix('transactions')->group(function () {
-            
-            // Transacciones Generales (CXP, CXC, Ingresos, Egresos)
-            Route::controller(TransactionController::class)->group(function () {
-                Route::get('/', 'index');
-                Route::get('{transaction}', 'show');
-                Route::post('register-cxp', 'storeAccountPayable');
-                Route::post('register-cxc', 'storeAccountReceivable');
-                Route::post('register-ingress', 'storeDirectIngress');
-                Route::post('register-egress', 'storeDirectEgress');
-                Route::post('pay-debt', 'payAccountPayable');
-                Route::post('receive-payment', 'receiveAccountReceivable');
-            });
+    Route::apiResource('transactions/dollar-purchase', DollarPurchaseController::class)
+        ->only(['index', 'show', 'store'])
+        ->middleware('permission:manage_requests');
 
-            // !! CORRECCIÓN 405:
-            // Se mueve la ruta de 'executeExchange' aquí para que coincida con la URL del frontend:
-            // POST /api/v1/transactions/execute-exchange
-            Route::post('execute-exchange', [ExchangeTransactionController::class, 'executeExchange']);
-        });
+    // --- Lógica de Negocio (Tasas) ---
+    Route::apiResource('rates', ExchangeRateController::class)
+        ->only(['index', 'show', 'store'])
+        ->middleware('permission:manage_rates');
 
-        // ---------------------------------------------------------
-        // MÓDULO DE ESTADÍSTICAS Y REPORTES
-        // Prefijo: /api/v1/stats
-        // ---------------------------------------------------------
-        Route::prefix('stats')->controller(StatsController::class)->group(function () {
-            Route::get('balance-general', 'getNetBalance');
-            Route::get('production-by-broker', 'getBrokerProduction');
-            Route::get('total-volume', 'getVolumeOperated');
-            Route::get('total-commissions', 'getCommissionTotals');
-        });
+    Route::apiResource('currencies', CurrencyController::class)
+        ->middleware('permission:manage_rates');
 
-        /*
-        // --- RUTA ANTIGUA DE INTERCAMBIO (ELIMINADA) ---
-        // Se elimina este prefijo '/exchange' porque la ruta se movió a '/transactions'
-        
-        Route::prefix('exchange')->controller(ExchangeTransactionController::class)->group(function () {
-             Route::post('execute', 'executeExchange'); // <-- Esta era la ruta incorrecta
-        });
-        */
+    // --- Contabilidad (Por Pagar / Por Cobrar) ---
+    Route::apiResource('ledger', LedgerEntryController::class)
+        ->only(['index', 'show', 'update']); // Solo listar, ver y actualizar (ej. pagar)
 
-    });
+    // --- Auditoría ---
+    Route::get('audit-logs', [AuditLogController::class, 'index'])
+        ->middleware('permission:view_database_history');
+
+    Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])
+        ->middleware('permission:manage_users');
+                                                             // --- Gestión de Usuarios (del Tenant) ---
+    Route::apiResource('users', TenantUserController::class) // 🚨 USAMOS EL CONTROLADOR CORRECTO
+        ->middleware('permission:manage_users');
 });

@@ -2,33 +2,65 @@
 
 namespace App\Models;
 
-use App\Models\Traits\HasTenant;
+use App\Models\Traits\BelongsToTenant;
+use App\Models\Traits\Filterable; // <-- 1. IMPORTAR
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Builder; // <-- 2. IMPORTAR
 
 class Account extends Model
 {
-    use HasFactory, HasTenant; // APLICAR EL TRAIT
-    
-    protected $fillable = ['tenant_id', 'name', 'type', 'is_system', 'is_active'];
-    
-    // Relación N:1 con Tenant
-    public function tenant()
+    use HasFactory, BelongsToTenant, Filterable;
+
+    /**
+     * @var array<int, string>
+     */
+    protected $fillable = [
+        'tenant_id',
+        'name',
+        'currency_code',
+        'balance',
+    ];
+
+    /**
+     * @var array<string, string>
+     */
+    protected $casts = [
+        'balance' => 'decimal:2',
+    ];
+
+    // --- Relaciones Inversas (Esta cuenta como origen/destino) ---
+
+    /**
+     * Transacciones donde esta cuenta fue el 'Origen'
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany
+     */
+    public function currencyExchangesFrom(): HasMany
     {
-        return $this->belongsTo(Tenant::class);
+        return $this->hasMany(CurrencyExchange::class, 'from_account_id');
     }
 
     /**
-     * Una cuenta (ej: "Caja General") puede tener muchas Cajas (ej: "Oficina", "Punto 1")
+     * Transacciones donde esta cuenta fue el 'Destino'
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany
      */
-    public function cashes()
+    public function currencyExchangesTo(): HasMany
     {
-        return $this->hasMany(Cash::class);
+        return $this->hasMany(CurrencyExchange::class, 'to_account_id');
     }
 
-    // Relación 1:M con TransactionDetails (para ver qué transacciones la afectan)
-    public function details()
+    /**
+     * Transacciones donde esta cuenta fue la 'Plataforma'
+     * @return \Illuminate\Database\Eloquent\Relations\HasMany
+     */
+    public function dollarPurchasesPlatform(): HasMany
     {
-        return $this->hasMany(TransactionDetail::class);
+        return $this->hasMany(DollarPurchase::class, 'platform_account_id');
+    }
+
+    public function scopeCurrencyCode(Builder $query, $code): Builder
+    {
+        return $query->where('currency_code', $code);
     }
 }

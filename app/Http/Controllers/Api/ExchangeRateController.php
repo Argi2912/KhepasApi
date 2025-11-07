@@ -1,102 +1,68 @@
 <?php
-
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ExchangeRate;
-use App\Http\Requests\StoreExchangeRateRequest;
-use App\Http\Requests\UpdateExchangeRateRequest;
-use App\Models\ExchangeTransaction;
-use Illuminate\Http\JsonResponse;
+use App\Services\ExchangeRateService; // <-- Se inyecta el Servicio
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Carbon; // Importar Carbon
+// Reemplaza con StoreExchangeRateRequest
 
 class ExchangeRateController extends Controller
 {
-    public function __construct()
+    protected $exchangeRateService;
+
+    // Inyección de dependencias del servicio
+    public function __construct(ExchangeRateService $exchangeRateService)
     {
-        $this->middleware('permission:manage exchange rates');
+        $this->exchangeRateService = $exchangeRateService;
     }
 
-    // ... (index, store, show, update, destroy se mantienen igual) ...
-    public function index(Request $request): JsonResponse
+    public function index(Request $request)
     {
-        $query = ExchangeRate::with(['fromCurrency', 'toCurrency'])
-                               ->latest('date');
-
-        if ($request->filled('date')) {
-            $query->whereDate('date', $request->date);
-        }
-        
-        if ($request->filled('from_currency_id')) {
-            $query->where('from_currency_id', $request->from_currency_id);
-        }
-        
-        $perPage = $request->get('per_page', 20);
-        $rates = $query->paginate($perPage);
-        
-        return response()->json($rates);
-    }
-
-    public function store(StoreExchangeRateRequest $request): JsonResponse
-    {
-        $rate = ExchangeRate::create($request->validated());
-        return response()->json(['message' => 'Tasa de cambio registrada.', 'rate' => $rate], 201);
-    }
-
-    public function show(ExchangeRate $exchangeRate): JsonResponse
-    {
-        return response()->json($exchangeRate->load(['fromCurrency', 'toCurrency']));
-    }
-
-    public function update(UpdateExchangeRateRequest $request, ExchangeRate $exchangeRate): JsonResponse
-    {
-        $exchangeRate->update($request->validated());
-        return response()->json(['message' => 'Tasa de cambio actualizada.', 'rate' => $exchangeRate]);
-    }
-
-    public function destroy(ExchangeRate $exchangeRate): JsonResponse
-    {
-        if (ExchangeTransaction::where('exchange_rate_id', $exchangeRate->id)->exists()) {
-             return response()->json([
-               'message' => 'No se puede eliminar: La tasa está siendo usada en operaciones de intercambio.'
-             ], 422);
-        }
-        
-        $exchangeRate->delete();
-        return response()->json(['message' => 'Tasa de cambio eliminada.']);
-    }
-
-
-    /**
-     * Obtiene la tasa de cambio más reciente para un par de divisas y una fecha.
-     * (MODIFICADO PARA INCLUIR LA FECHA)
-     */
-    public function getLatestRate(Request $request): \Illuminate\Http\JsonResponse
-    {
-        // --- INICIO DE LA CORRECCIÓN ---
-        // 1. Añadir 'date' a la validación
-        $validated = $request->validate([
-            'from_currency_id' => 'required|exists:currencies,id',
-            'to_currency_id'   => 'required|exists:currencies,id|different:from_currency_id',
-            'date'             => 'required|date_format:Y-m-d', // Validar la fecha
+        $request->validate([
+            'is_active'     => 'nullable|boolean', // 🚨 Aceptar el filtro
+            'from_currency' => 'nullable|string',
+            'to_currency'   => 'nullable|string',
+            'start_date'    => 'nullable|date_format:Y-m-d',
+            'end_date'      => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
         ]);
 
-        $rate = ExchangeRate::where('tenant_id', Auth::user()->tenant_id)
-                            ->where('from_currency_id', $validated['from_currency_id'])
-                            ->where('to_currency_id', $validated['to_currency_id'])
-                            // 2. Usar la fecha para buscar la tasa correcta
-                            ->whereDate('date', '<=', $validated['date']) 
-                            ->latest('date') // La más reciente (en o antes de la fecha dada)
-                            ->with(['fromCurrency', 'toCurrency']) 
-                            ->first();
-        // --- FIN DE LA CORRECCIÓN --- (Esta es la línea 84-91 aprox)
+        $query = ExchangeRate::query();
 
-        if (!$rate) {
-            return response()->json(['message' => 'No se encontró una tasa de cambio para este par en la fecha seleccionada (o anterior).'], 404);
-        }
+        // 🚨 CORRECCIÓN: Aplicar el filtro 'is_active'
+        // Esto es lo que soluciona el problema de "TASA NO DISPONIBLE"
+        $query->when($request->boolean('is_active'), function ($q) {
+            return $q->where('is_active', true);
+        });
 
-        return response()->json($rate);
+        $query->when($request->from_currency, fn($q, $code) => $q->fromCurrency($code));
+        $query->when($request->to_currency, fn($q, $code) => $q->toCurrency($code));
+        $query->when($request->start_date, fn($q, $date) => $q->fromDate($date));
+        $query->when($request->end_date, fn($q, $date) => $q->toDate($date));
+
+        return $query->latest()->paginate(15)->withQueryString();
     }
+
+    public function store(Request $request) // Usa StoreExchangeRateRequest
+    {
+        $validated = $request->validate([
+            'from_currency' => 'required|string',
+            'to_currency'   => 'required|string',
+            'rate'          => 'required|numeric|min:0.00000001',
+        ]);
+
+        // Delega la lógica (incluyendo crear la tasa inversa) al servicio
+        $rate = $this->exchangeRateService->createRate($validated);
+
+        return response()->json($rate, 201);
+    }
+
+    public function show(ExchangeRate $exchangeRate)
+    {
+        return $exchangeRate;
+    }
+
+    // update y destroy se omiten por simplicidad,
+    // ya que las tasas suelen registrarse, no editarse.
+    // Si se editan, el ActivityLog registrará el cambio.
 }
