@@ -99,6 +99,8 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::apiResource('accounts', AccountController::class);
 
     // --- Módulo 3: Solicitudes (Transacciones) ---
+
+    
     Route::apiResource('transactions/currency-exchange', CurrencyExchangeController::class)
         ->only(['index', 'show', 'store'])
         ->middleware('permission:manage_requests'); // 'index' y 'show' podrían tener 'view_database_history'
@@ -108,9 +110,16 @@ Route::group(['middleware' => ['auth:api']], function () {
         ->middleware('permission:manage_requests');
 
     // --- Lógica de Negocio (Tasas) ---
+    // 🚨 1. NUEVA RUTA (Para el store de Pinia y los formularios)
+    // Usamos 'manage_requests' porque el 'cajero' necesita estas tasas.
+    Route::get('rates/all', [ExchangeRateController::class, 'all'])
+         ->middleware('permission:manage_requests');
+
+    // 🚨 2. RUTA DE RECURSO (Para el CRUD de Tasas)
+    // Añadimos 'update' a la lista 'only'.
     Route::apiResource('rates', ExchangeRateController::class)
-        ->only(['index', 'show', 'store'])
-        ->middleware('permission:manage_rates');
+         ->only(['index', 'show', 'store', 'update']) 
+         ->middleware('permission:manage_rates');
 
     Route::apiResource('currencies', CurrencyController::class)
         ->middleware('permission:manage_rates');

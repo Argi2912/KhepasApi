@@ -22,6 +22,7 @@ return new class extends Migration
             $table->foreignId('provider_id')->constrained('providers');
             $table->foreignId('admin_user_id')->constrained('users');
             $table->foreignId('platform_account_id')->constrained('accounts'); // Plataforma de donde sale el dinero
+            $table->foreignId('from_account_id')->constrained('accounts'); 
 
                                                        // Montos (de la imagen)
             $table->decimal('amount_received', 14, 2); // Ej: 2500 (en VES, por ej.)

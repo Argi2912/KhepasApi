@@ -5,6 +5,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ExchangeRate;
 use App\Services\ExchangeRateService; // <-- Se inyecta el Servicio
 use Illuminate\Http\Request;
+
 // Reemplaza con StoreExchangeRateRequest
 
 class ExchangeRateController extends Controller
@@ -16,11 +17,10 @@ class ExchangeRateController extends Controller
     {
         $this->exchangeRateService = $exchangeRateService;
     }
-
+    
     public function index(Request $request)
     {
         $request->validate([
-            'is_active'     => 'nullable|boolean', // 🚨 Aceptar el filtro
             'from_currency' => 'nullable|string',
             'to_currency'   => 'nullable|string',
             'start_date'    => 'nullable|date_format:Y-m-d',
@@ -29,18 +29,24 @@ class ExchangeRateController extends Controller
 
         $query = ExchangeRate::query();
 
-        // 🚨 CORRECCIÓN: Aplicar el filtro 'is_active'
-        // Esto es lo que soluciona el problema de "TASA NO DISPONIBLE"
-        $query->when($request->boolean('is_active'), function ($q) {
-            return $q->where('is_active', true);
-        });
-
         $query->when($request->from_currency, fn($q, $code) => $q->fromCurrency($code));
         $query->when($request->to_currency, fn($q, $code) => $q->toCurrency($code));
         $query->when($request->start_date, fn($q, $date) => $q->fromDate($date));
         $query->when($request->end_date, fn($q, $date) => $q->toDate($date));
 
+        // Se mantiene el paginado en 15
         return $query->latest()->paginate(15)->withQueryString();
+    }
+
+    /**
+     * 🚨 NUEVO MÉTODO (ALL)
+     * Devuelve TODAS las tasas sin paginar.
+     * Usado por el store de Pinia (frontend) para los cálculos.
+     */
+    public function all()
+    {
+        // Devuelve todas las tasas, más recientes primero.
+        return ExchangeRate::latest()->get();
     }
 
     public function store(Request $request) // Usa StoreExchangeRateRequest

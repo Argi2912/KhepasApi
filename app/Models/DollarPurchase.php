@@ -26,6 +26,7 @@ class DollarPurchase extends Model
         'broker_id',
         'provider_id',
         'admin_user_id',
+        'from_account_id', 
         'platform_account_id',
         'amount_received',
         'deliver_currency_code',
@@ -86,6 +87,16 @@ class DollarPurchase extends Model
     public function platformAccount(): BelongsTo
     {
         return $this->belongsTo(Account::class, 'platform_account_id');
+    }
+
+    /**
+     * 🚨 NUEVA RELACIÓN
+     * Cuenta de Origen (de donde el cliente paga los VES)
+     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
+     */
+    public function fromAccount(): BelongsTo
+    {
+        return $this->belongsTo(Account::class, 'from_account_id');
     }
     
     /**

@@ -65,7 +65,6 @@ class CurrencyExchangeController extends Controller
     {
         // La validación (que los IDs existan, etc.) debe ir en un Form Request
         $validatedData = $request->validate([
-            'number' => 'required|string|unique:currency_exchanges,number',
             'client_id' => 'required|exists:clients,id',
             'broker_id' => 'required|exists:brokers,id',
             'provider_id' => 'required|exists:providers,id',

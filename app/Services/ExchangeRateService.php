@@ -52,4 +52,31 @@ class ExchangeRateService
 
         return $mainRate;
     }
+
+    public function findRate(string $from_currency, string $to_currency): ?float
+    {
+        if ($from_currency === $to_currency) {
+            return 1.0;
+        }
+
+        // Tasa directa
+        $rate = ExchangeRate::where('from_currency', $from_currency)
+            ->where('to_currency', $to_currency)
+            ->value('rate');
+
+        if ($rate !== null) {
+            return (float) $rate;
+        }
+
+        // Tasa inversa
+        $inverseRate = ExchangeRate::where('from_currency', $to_currency)
+            ->where('to_currency', $from_currency)
+            ->value('rate');
+        
+        if ($inverseRate !== null && (float) $inverseRate !== 0.0) {
+            return 1.0 / (float) $inverseRate;
+        }
+
+        return null;
+    }
 }

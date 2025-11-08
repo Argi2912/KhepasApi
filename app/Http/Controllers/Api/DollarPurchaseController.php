@@ -47,12 +47,12 @@ class DollarPurchaseController extends Controller
     public function store(Request $request) // Usa StoreDollarPurchaseRequest
     {
         $validatedData = $request->validate([
-            'number'                  => 'required|string|unique:dollar_purchases,number',
             'client_id'               => 'required|exists:clients,id',
             'broker_id'               => 'required|exists:brokers,id',
             'provider_id'             => 'required|exists:providers,id',
             'admin_user_id'           => 'required|exists:users,id',
             'platform_account_id'     => 'required|exists:accounts,id',
+            'from_account_id'         => 'required|exists:accounts,id', // <-- 🚨 AÑADIDO
             'amount_received'         => 'required|numeric|min:0.01',
             'deliver_currency_code' => 'required|string|size:3',
             'buy_rate'                => 'required|numeric|min:0',
