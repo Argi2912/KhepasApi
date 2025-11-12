@@ -18,7 +18,7 @@ class RolesAndPermissionsSeeder extends Seeder
 
         // --- Crear Permisos ---
         Permission::create(['name' => 'manage_tenants']); // Solo Superadmin
-
+        
         Permission::create(['name' => 'view_dashboard']);
         Permission::create(['name' => 'manage_users']);         // CRUD de usuarios del tenant
         Permission::create(['name' => 'manage_clients']);         // CRUD de usuarios del tenant
@@ -43,6 +43,7 @@ class RolesAndPermissionsSeeder extends Seeder
                 'manage_rates',
                 'view_statistics',
                 'view_database_history',
+                
             ]);
 
         // 3. Cajero (del Tenant)

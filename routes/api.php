@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\AuditLogController;
 
+
 /*
 |--------------------------------------------------------------------------
 | Controladores de Autenticación y Superadmin
@@ -27,6 +28,7 @@ use App\Http\Controllers\Api\LedgerEntryController;
 | Controladores del Tenant (Lógica de Negocio y Transacciones)
 |--------------------------------------------------------------------------
 */
+use App\Http\Controllers\Api\PlatformController;
 use App\Http\Controllers\Api\ProviderController;
 use App\Http\Controllers\Api\StatisticsController;
 use App\Http\Controllers\Api\Superadmin\TenantController;
@@ -78,6 +80,7 @@ Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'supe
 */
 Route::group(['middleware' => ['auth:api']], function () {
 
+    
     // --- Autenticación y Perfil ---
     Route::post('logout', [AuthController::class, 'logout']);
     Route::get('me', [AuthController::class, 'me']);
@@ -97,6 +100,7 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::apiResource('providers', ProviderController::class);
     Route::apiResource('brokers', BrokerController::class);
     Route::apiResource('accounts', AccountController::class);
+    Route::apiResource('platforms', PlatformController::class);
 
     // --- Módulo 3: Solicitudes (Transacciones) ---
 
