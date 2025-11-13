@@ -5,37 +5,42 @@ namespace Database\Seeders;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
+use Spatie\Permission\PermissionRegistrar; // 🚨 1. IMPORTAR
 
 class RolesAndPermissionsSeeder extends Seeder
 {
-    /**
-     * Run the database seeds.
-     */
     public function run(): void
     {
-        // Reset cached roles and permissions
-        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+        // 2. Limpiar caché de permisos
+        app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
-        // --- Crear Permisos ---
-        Permission::create(['name' => 'manage_tenants']); // Solo Superadmin
-        
-        Permission::create(['name' => 'view_dashboard']);
-        Permission::create(['name' => 'manage_users']);         // CRUD de usuarios del tenant
-        Permission::create(['name' => 'manage_clients']);         // CRUD de usuarios del tenant
-        Permission::create(['name' => 'manage_requests']);      // Crear/Ver transacciones
-        Permission::create(['name' => 'manage_rates']);        // Crear tasas de cambio
-        Permission::create(['name' => 'view_statistics']);      // Ver reportes
-        Permission::create(['name' => 'view_database_history']); // Ver logs y tablas de historial
-        
-        // --- Crear Roles y Asignar Permisos ---
+        // --- Lista de Permisos ---
+        $permissions = [
+            'manage_tenants',
+            'manage_platforms', // <-- El permiso que necesitas
+            'view_dashboard',
+            'manage_users',
+            'manage_clients',
+            'manage_requests',
+            'manage_rates',
+            'view_statistics',
+            'view_database_history',
+        ];
 
-        // 1. Superadmin (Global)
-        Role::create(['name' => 'superadmin'])
-            ->givePermissionTo('manage_tenants');
+        // 3. Crear todos los permisos (Modo Seguro)
+        foreach ($permissions as $permissionName) {
+            Permission::firstOrCreate(['name' => $permissionName]);
+        }
+
+        // --- Asignar Permisos a Roles (Modo Seguro) ---
+
+        // 1. Superadmin
+        Role::firstOrCreate(['name' => 'superadmin'])
+            ->syncPermissions(['manage_tenants']); // syncPermissions es más limpio
 
         // 2. Administrador (del Tenant)
-        Role::create(['name' => 'admin_tenant'])
-            ->givePermissionTo([
+        Role::firstOrCreate(['name' => 'admin_tenant'])
+            ->syncPermissions([ // 🚨 syncPermissions asegura que tenga esta lista
                 'view_dashboard',
                 'manage_users',
                 'manage_clients',
@@ -43,28 +48,19 @@ class RolesAndPermissionsSeeder extends Seeder
                 'manage_rates',
                 'view_statistics',
                 'view_database_history',
-                
+                'manage_platforms', // <-- Asignando el permiso
             ]);
 
-        // 3. Cajero (del Tenant)
-        Role::create(['name' => 'cajero'])
-            ->givePermissionTo([
-                'view_dashboard',
-                'manage_requests', // Su función principal
-            ]);
+        // 3. Cajero
+        Role::firstOrCreate(['name' => 'cajero'])
+            ->syncPermissions(['view_dashboard', 'manage_requests']);
 
-        // 4. Analista (del Tenant)
-        Role::create(['name' => 'analista'])
-            ->givePermissionTo([
-                'view_dashboard',
-                'view_statistics', // Su función principal
-                'view_database_history',
-            ]);
+        // 4. Analista
+        Role::firstOrCreate(['name' => 'analista'])
+            ->syncPermissions(['view_dashboard', 'view_statistics', 'view_database_history']);
             
-        // 5. Corredor (del Tenant)
-        Role::create(['name' => 'corredor'])
-            ->givePermissionTo([
-                'view_dashboard',
-            ]);
+        // 5. Corredor
+        Role::firstOrCreate(['name' => 'corredor'])
+            ->syncPermissions(['view_dashboard']);
     }
 }
