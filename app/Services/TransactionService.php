@@ -5,221 +5,222 @@ namespace App\Services;
 use App\Models\Account;
 use App\Models\Broker;
 use App\Models\CurrencyExchange;
-use App\Models\DollarPurchase;
+use App\Models\DollarPurchase; // Si usas compras
+use App\Models\InternalTransaction;
+use App\Models\LedgerEntry;
 use App\Models\Provider;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Validation\ValidationException;
+use Exception;
 
 class TransactionService
 {
     /**
-     * Función de ayuda para generar números secuenciales.
-     *
-     * @param string $modelClass (Ej: CurrencyExchange::class)
-     * @param string $prefix (Ej: 'CE-')
-     * @return string (Ej: 'CE-00001')
+     * Genera un número secuencial (Ej: CE-00001)
      */
     private function generateSequentialNumber(string $modelClass, string $prefix): string
     {
-        // 1. Obtener el último ID registrado para el tenant actual
-        // (Asumimos que los modelos usan el Trait BelongsToTenant)
-        // Usamos latest('id') para obtener el registro más reciente.
         $latest = $modelClass::latest('id')->first();
-        
         $nextId = $latest ? $latest->id + 1 : 1;
-
-        // 2. Formatear el número (Ej: 1 -> 00001)
-        // Un padding de 5 dígitos nos da hasta 99999 transacciones.
-        $sequential = str_pad($nextId, 5, '0', STR_PAD_LEFT);
-
-        return $prefix . $sequential;
+        return $prefix . str_pad($nextId, 5, '0', STR_PAD_LEFT);
     }
 
-
     /**
-     * Procesa una transacción de "Cambio de Divisas".
+     * 1. Crea el Intercambio
+     * 2. Mueve saldos de cuentas
+     * 3. Genera DEUDAS AUTOMÁTICAS (Ledger) para Broker y Proveedor
      */
     public function createCurrencyExchange(array $data)
     {
         return DB::transaction(function () use ($data) {
             
-            // 1. GENERAR EL NÚMERO SECUENCIAL
-            $data['number'] = $this->generateSequentialNumber(CurrencyExchange::class, 'CE-');
-
-            // 2. Cargar modelos
-            $fromAccount = Account::findOrFail($data['from_account_id']);
-            $toAccount = Account::findOrFail($data['to_account_id']);
-            $broker = Broker::find($data['broker_id']); // Puede ser nulo
-            $provider = Provider::find($data['provider_id']); // Puede ser nulo
-            $adminUser = User::findOrFail($data['admin_user_id']);
-            $amount = (float) $data['amount_received'];
-
-            // 3. Calcular Comisiones (en valor monetario de la divisa de origen)
-            $commChargedVal = $amount * ((float) $data['commission_charged_pct'] / 100);
-            $commProviderVal = $amount * ((float) $data['commission_provider_pct'] / 100);
-            $commAdminVal = $amount * ((float) $data['commission_admin_pct'] / 100);
+            // A. Validar Saldos y Bloquear Cuentas
+            $fromAccount = Account::lockForUpdate()->findOrFail($data['from_account_id']);
+            $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
+            $amountSent = (float) $data['amount_sent'];
+            $amountReceived = (float) $data['amount_received'];
             
-            // 4. Calcular Tasa y Neto
-            // Esta lógica asume que el frontend NO envía la tasa, sino que el backend la busca.
-            // Si el frontend ya calculó, esta lógica debe cambiar.
-            // Por ahora, seguimos la lógica de tus archivos originales donde la tasa no se envía.
-            $exchangeRate = 1; // 🚨 ¡REEMPLAZAR ESTO CON LÓGICA DE TASA REAL!
-                               // $rate = app(ExchangeRateService::class)->findRate($fromAccount->currency_code, $toAccount->currency_code);
-                               // if(!$rate) throw new \Exception("No se encontró tasa de cambio.");
-                               // $exchangeRate = $rate->rate;
-
-            $totalCommission = $commChargedVal + $commProviderVal + $commAdminVal;
-            
-            // Asumimos que el cliente envía 100, las comisiones (1+1+1=3) se restan, y el neto (97) se convierte.
-            // $netAmountToDeliver = ($amount - $totalCommission) * $exchangeRate; 
-            
-            // O, el cliente envía 100, las comisiones (1+1+1=3) se suman al débito, y los 100 se convierten.
-            // Esta es la lógica del frontend:
-            $netAmountToDeliver = $amount * $exchangeRate;
-            $totalDebit = $amount + $commChargedVal + $commProviderVal + $commAdminVal;
-
-
-            // 5. Validaciones
-            if ($netAmountToDeliver <= 0) {
-                throw ValidationException::withMessages(['amount_received' => 'El monto neto a entregar es cero o negativo.']);
+            if ($fromAccount->balance < $amountSent) {
+                throw new Exception("Saldo insuficiente en {$fromAccount->name} para enviar {$amountSent} {$fromAccount->currency_code}.");
             }
             
-            // Validar saldo de la cuenta de origen
-            if ($fromAccount->balance < $totalDebit) {
-                throw ValidationException::withMessages(['from_account_id' => "Saldo insuficiente. Se requiere {$totalDebit} y la cuenta tiene {$fromAccount->balance}."]);
-            }
+            // B. Mover Saldos
+            $fromAccount->decrement('balance', $amountSent);
+            $toAccount->increment('balance', $amountReceived);
 
-            // 6. Crear la Transacción
-            $transaction = CurrencyExchange::create($data);
+            // C. Crear el registro principal
+            $exchange = CurrencyExchange::create([
+                'tenant_id' => Auth::user()->tenant_id,
+                'number' => $this->generateSequentialNumber(CurrencyExchange::class, 'CE-'),
+                'client_id' => $data['client_id'],
+                'broker_id' => $data['broker_id'] ?? null,
+                'provider_id' => $data['provider_id'] ?? null,
+                'admin_user_id' => $data['admin_user_id'],
+                'from_account_id' => $fromAccount->id,
+                'to_account_id' => $toAccount->id,
+                'amount_sent' => $amountSent,
+                'amount_received' => $amountReceived,
+                'exchange_rate' => $data['exchange_rate'],
+                'commission_total_amount' => $data['commission_total_amount'] ?? 0,
+                'commission_provider_amount' => $data['commission_provider_amount'] ?? 0,
+                'commission_admin_amount' => $data['commission_admin_amount'] ?? 0,
+                'trader_info' => $data['trader_info'] ?? null,
+                'reference_id' => $data['reference_id'] ?? null,
+            ]);
 
-            // 7. Actualizar Balances (Caja)
-            // Debitar cuenta origen (Monto + Comisiones)
-            $fromAccount->decrement('balance', $totalDebit);
-            // Acreditar cuenta destino
-            $toAccount->increment('balance', $netAmountToDeliver);
+            // D. Generar Asientos Contables (Ledger Entries)
 
-            // 8. Crear Asientos Contables (Payables/Receivables)
-            // (La lógica de asientos contables va aquí...)
-
-            return $transaction;
-        });
-    }
-
-    /**
-     * Procesa una transacción de "Compra de Dólares" (Ej: VES a USD).
-     *
-     * LÓGICA BASADA EN EL FRONTEND (Manual USD -> Auto VES):
-     * 1. El frontend envía 'amount_received' como el MONTO BASE en VES (Ej: 4000 VES).
-     * Este 'amount_received' fue calculado en el frontend: (100 USD * 40.0 Tasa Venta)
-     * 2. El 'TransactionService' debe REPLICAR los cálculos del frontend para validar.
-     */
-    public function createDollarPurchase(array $data)
-    {
-        return DB::transaction(function () use ($data) {
-            
-            // 1. GENERAR EL NÚMERO SECUENCIAL
-            $data['number'] = $this->generateSequentialNumber(DollarPurchase::class, 'DP-');
-
-            // 2. Cargar Modelos
-            $fromAccount = Account::findOrFail($data['from_account_id']); // Cuenta Origen (VES)
-            $platformAccount = Account::findOrFail($data['platform_account_id']); // Cuenta Plataforma (Divisa)
-            $broker = Broker::find($data['broker_id']);
-            $provider = Provider::find($data['provider_id']);
-            $adminUser = User::findOrFail($data['admin_user_id']);
-
-            // 3. Validar Divisas de Cuentas
-            if ($fromAccount->currency_code === $platformAccount->currency_code) {
-                 throw ValidationException::withMessages(['from_account_id' => 'La cuenta de origen y la de plataforma no pueden tener la misma divisa.']);
-            }
-            if ($data['deliver_currency_code'] !== $platformAccount->currency_code) {
-                 throw ValidationException::withMessages(['platform_account_id' => 'La divisa de la cuenta de plataforma no coincide con la divisa a entregar.']);
-            }
-
-            // 4. Definir variables base (enviadas desde el frontend)
-            $vesReceived_Base = (float) $data['amount_received']; // Ej: 4000 VES (Calculado en frontend)
-            $buyRate = (float) $data['buy_rate'];           // Ej: 39.0 (Costo)
-            $sellRate = (float) $data['received_rate'];      // Ej: 40.0 (Venta)
-
-            // 5. Calcular Monto en Divisa (USD)
-            // Replicamos el cálculo del frontend para saber el monto en USD
-            // (Este es el 'amount_to_deliver' del frontend)
-            $usdDelivered_Client = $vesReceived_Base / $sellRate; // Ej: 4000 / 40.0 = 100 USD
-
-            // 6. Calcular Comisiones (basadas en el monto en USD)
-            $commCharged_USD = $usdDelivered_Client * ((float) $data['commission_charged_pct'] / 100);
-            $commProvider_USD = $usdDelivered_Client * ((float) $data['commission_provider_pct'] / 100);
-
-            // 7. Calcular Costos Totales (Replicando la lógica del frontend)
-            
-            // A. Costo Total en VES (Lo que paga el cliente)
-            $commCharged_VES = $commCharged_USD * $sellRate; // Comisión Empresa convertida a VES
-            $commProvider_VES = $commProvider_USD * $sellRate; // Comisión Proveedor convertida a VES
-            $totalVesCost = $vesReceived_Base + $commCharged_VES + $commProvider_VES; // Ej: 4000 + (Coms en VES)
-
-            // B. Costo Total en USD (Lo que sale de la plataforma)
-            $totalUsdDebit_Platform = $usdDelivered_Client + $commProvider_USD;
-            
-            // 8. Validar Balances
-            // A. ¿Tiene el cliente suficientes Bolívares?
-            if ($fromAccount->balance < $totalVesCost) {
-                throw ValidationException::withMessages(['from_account_id' => "Saldo insuficiente. Se requiere {$totalVesCost} {$fromAccount->currency_code} y la cuenta tiene {$fromAccount->balance}."]);
-            }
-            // B. ¿Tiene la plataforma suficientes Dólares?
-            if ($platformAccount->balance < $totalUsdDebit_Platform) {
-                 throw ValidationException::withMessages(['platform_account_id' => "Saldo de plataforma insuficiente. Se requiere {$totalUsdDebit_Platform} {$platformAccount->currency_code} y la cuenta tiene {$platformAccount->balance}."]);
-            }
-
-            // 9. Crear la Transacción
-            // $data ya contiene 'from_account_id' y 'number'
-            $purchase = DollarPurchase::create($data);
-            
-            // 10. Actualizar Balances (Caja)
-            $fromAccount->decrement('balance', $totalVesCost);
-            $platformAccount->decrement('balance', $totalUsdDebit_Platform);
-            
-            // 11. Crear Asientos Contables (Ledger)
-            
-            // A. Ganancia por Spread (Diferencial Cambiario)
-            $grossProfitVes = $vesReceived_Base - ($usdDelivered_Client * $buyRate); // Ej: 4000 - (100 * 39.0) = 100 VES
-            if ($grossProfitVes > 0) {
-                $purchase->ledgerEntries()->create([
-                    'tenant_id' => $purchase->tenant_id,
-                    'description' => "Ganancia Spread (Sol. #{$purchase->number})",
-                    'amount' => $grossProfitVes,
-                    'type' => 'receivable', 'status' => 'paid',
-                    'entity_id' => $broker ? $broker->id : null,
-                    'entity_type' => $broker ? Broker::class : null,
+            // D.1. Comisión a Pagar al Broker (CxP)
+            $brokerCommAmount = (float) ($data['commission_admin_amount'] ?? 0); 
+            $broker = $data['broker_id'] ? Broker::find($data['broker_id']) : null;
+            if ($brokerCommAmount > 0 && $broker) {
+                $exchange->ledgerEntries()->create([
+                    'tenant_id' => $exchange->tenant_id,
+                    'description' => "Comisión Corredor {$broker->user->name} (Op. #{$exchange->number})",
+                    'amount' => $brokerCommAmount,
+                    'type' => 'payable', 
+                    'status' => 'pending', // Siempre pendiente
+                    'entity_id' => $broker->id,
+                    'entity_type' => Broker::class,
+                    'transaction_type' => CurrencyExchange::class,
+                    'transaction_id' => $exchange->id,
                 ]);
             }
 
-            // B. Ganancia por Comisión de Empresa
-            if ($commCharged_VES > 0) {
-                 $purchase->ledgerEntries()->create([
-                    'tenant_id' => $purchase->tenant_id,
-                    'description' => "Comisión Empresa (Sol. #{$purchase->number})",
-                    'amount' => $commCharged_VES,
-                    'type' => 'receivable', 'status' => 'paid',
-                    'entity_id' => $broker ? $broker->id : null,
-                    'entity_type' => $broker ? Broker::class : null,
+            // D.2. Comisión Ganada por la Empresa (CxC) - Lógica dinámica
+            $companyCommAmount = (float) ($data['commission_total_amount'] ?? 0);
+            $client = \App\Models\Client::find($exchange->client_id);
+            
+            if ($companyCommAmount > 0) {
+                // 🚨 Determina el estado: 'pending' si se difiere, 'paid' si se cobró.
+                $isDeferred = $data['is_commission_deferred'] ?? false;
+                $status = $isDeferred ? 'pending' : 'paid';
+
+                $exchange->ledgerEntries()->create([
+                    'tenant_id' => $exchange->tenant_id,
+                    'description' => "Comisión de Casa - Sol. #{$exchange->number} (Cliente)",
+                    'amount' => $companyCommAmount,
+                    'type' => 'receivable', 
+                    'status' => $status, // 🚨 ESTADO DINÁMICO
+                    'entity_id' => $client->id,
+                    'entity_type' => \App\Models\Client::class, // El deudor es el cliente
+                    'transaction_type' => CurrencyExchange::class,
+                    'transaction_id' => $exchange->id,
                 ]);
             }
-
-            // C. Comisión por Pagar al Proveedor
-            if ($commProvider_USD > 0 && $provider) {
-                $commProvider_Payable_VES = $commProvider_USD * $buyRate; // Costo de la comisión del proveedor
-                $purchase->ledgerEntries()->create([
-                    'tenant_id' => $purchase->tenant_id,
-                    'description' => "Comisión Proveedor (Sol. #{$purchase->number})",
-                    'amount' => $commProvider_Payable_VES,
-                    'type' => 'payable', 'status' => 'pending',
+            
+            // D.3. Comisión a Pagar al Proveedor (CxP)
+            $providerCommAmount = (float) ($data['commission_provider_amount'] ?? 0); 
+            $provider = $data['provider_id'] ? Provider::find($data['provider_id']) : null;
+            if ($providerCommAmount > 0 && $provider) {
+                $exchange->ledgerEntries()->create([
+                    'tenant_id' => $exchange->tenant_id,
+                    'description' => "Comisión Proveedor {$provider->name} (Op. #{$exchange->number})",
+                    'amount' => $providerCommAmount,
+                    'type' => 'payable', 
+                    'status' => 'pending', // Siempre pendiente
                     'entity_id' => $provider->id,
                     'entity_type' => Provider::class,
+                    'transaction_type' => CurrencyExchange::class,
+                    'transaction_id' => $exchange->id,
                 ]);
             }
 
-            return $purchase->load('fromAccount', 'platformAccount', 'client');
+            return $exchange->load('client', 'fromAccount', 'toAccount');
         });
     }
+    
+    /**
+     * NUEVO: Paga una deuda del Ledger creando una Transacción Interna.
+     * Esto cierra el ciclo: LedgerEntry (Pendiente) -> InternalTransaction (Dinero Real) -> LedgerEntry (Pagado)
+     */
+    public function processDebtPayment(LedgerEntry $entry, int $accountId)
+    {
+        return DB::transaction(function () use ($entry, $accountId) {
+            // 1. Validaciones básicas
+            if ($entry->status === 'paid') {
+                throw new Exception("Este asiento ya fue procesado anteriormente.");
+            }
+
+            $account = Account::lockForUpdate()->findOrFail($accountId);
+
+            // 2. LÓGICA BIFURCADA (PAYABLE vs RECEIVABLE)
+            if ($entry->type === 'payable') {
+                // --- ESCENARIO A: CUENTA POR PAGAR (Sale dinero) ---
+                // Ejemplo: Le pagamos la comisión al Broker.
+                
+                if ($account->balance < $entry->amount) {
+                    throw new Exception("Saldo insuficiente en {$account->name} para pagar esta deuda.");
+                }
+                
+                $account->decrement('balance', $entry->amount);
+                
+                $txType = 'expense';
+                $category = 'Pago de Comisiones';
+                $descPrefix = "Pago de deuda";
+
+            } else {
+                // --- ESCENARIO B: CUENTA POR COBRAR (Entra dinero) ---
+                // Ejemplo: Un cliente nos paga un préstamo o saldo pendiente.
+                
+                // Aquí NO validamos saldo insuficiente, porque estamos RECIBIENDO dinero.
+                $account->increment('balance', $entry->amount);
+                
+                $txType = 'income';
+                $category = 'Cobro de Deuda';
+                $descPrefix = "Cobro de crédito";
+            }
+
+            // 3. Crear registro en Caja (InternalTransaction)
+            // Esto deja huella en el historial de la cuenta bancaria/caja
+            $internalTx = InternalTransaction::create([
+                'tenant_id' => $entry->tenant_id,
+                'user_id' => Auth::id(),
+                'account_id' => $account->id,
+                'type' => $txType,        // 'expense' o 'income'
+                'category' => $category,  // Categoría automática
+                'amount' => $entry->amount,
+                'description' => "{$descPrefix} #{$entry->id}: {$entry->description}",
+                'transaction_date' => now(),
+            ]);
+
+            // 4. Marcar el Asiento como COMPLETADO ('paid')
+            $entry->update(['status' => 'paid']);
+
+            return $internalTx;
+        });
+    }
+    
+    /**
+     * Mantiene la lógica original para gastos manuales directos (sin pasar por deuda)
+     */
+    public function createInternalTransaction(array $data)
+    {
+         return DB::transaction(function () use ($data) {
+            $account = Account::lockForUpdate()->findOrFail($data['account_id']);
+            
+            if ($data['type'] === 'expense') {
+                if ($account->balance < $data['amount']) {
+                    throw new Exception("Saldo insuficiente en {$account->name}");
+                }
+                $account->decrement('balance', $data['amount']);
+            } else {
+                $account->increment('balance', $data['amount']);
+            }
+
+            return InternalTransaction::create([
+                'tenant_id' => Auth::user()->tenant_id ?? 1,
+                'user_id' => $data['user_id'],
+                'account_id' => $data['account_id'],
+                'type' => $data['type'],
+                'category' => $data['category'],
+                'amount' => $data['amount'],
+                'description' => $data['description'],
+                'transaction_date' => $data['transaction_date'] ?? now(),
+            ]);
+        });
+    }
+    
+    // Agrega aquí createDollarPurchase si lo necesitas, siguiendo la misma lógica que createCurrencyExchange
 }

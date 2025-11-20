@@ -3,141 +3,109 @@
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
-use App\Models\Traits\Filterable; // <-- 1. IMPORTAR
+use App\Models\Traits\Filterable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
-use Spatie\Activitylog\LogOptions;
 use Spatie\Activitylog\Traits\LogsActivity;
-use Illuminate\Database\Eloquent\Builder; // <-- 2. IMPORTAR
+use Spatie\Activitylog\LogOptions;
+use Illuminate\Database\Eloquent\Builder;
 
 class CurrencyExchange extends Model
 {
     use HasFactory, BelongsToTenant, LogsActivity, Filterable;
 
-    /**
-     * @var array<int, string>
-     */
     protected $fillable = [
         'tenant_id',
-        'number',
+        'number',           // CE-00001
+        
+        // Participantes
         'client_id',
-        'broker_id',
-        'provider_id',
-        'admin_user_id',
-        'from_account_id',
-        'to_account_id',
-        'amount_received',
-        'commission_charged_pct',
-        'commission_provider_pct',
-        'commission_admin_pct',
+        'admin_user_id',    // Quien registra
+        'broker_id',        // Opcional
+        'provider_id',      // Opcional
+        
+        // Flujo de Dinero
+        'from_account_id',  // Cuenta que envía (Sale dinero)
+        'to_account_id',    // Cuenta que recibe (Entra dinero)
+        
+        // Datos Financieros (Manuales)
+        'amount_sent',      // Monto Salida
+        'amount_received',  // Monto Entrada
+        'exchange_rate',    // Tasa Manual
+        
+        // Comisiones (Montos exactos)
+        'commission_total_amount',
+        'commission_provider_amount',
+        'commission_admin_amount',
+        
+        // Trazabilidad
+        'trader_info',      // Ej: Pepito27 - Binance
+        'reference_id',     // Hash o ID externo
+        'status',
     ];
 
-    /**
-     * @var array<string, string>
-     */
     protected $casts = [
+        'amount_sent' => 'decimal:2',
         'amount_received' => 'decimal:2',
-        'commission_charged_pct' => 'decimal:2',
-        'commission_provider_pct' => 'decimal:2',
-        'commission_admin_pct' => 'decimal:2',
+        'exchange_rate' => 'decimal:8', // Alta precisión para tasas
+        'commission_total_amount' => 'decimal:2',
+        'commission_provider_amount' => 'decimal:2',
+        'commission_admin_amount' => 'decimal:2',
     ];
 
-    //--- Relaciones ---
+    // --- Relaciones ---
 
-    /**
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
-     */
     public function client(): BelongsTo
     {
         return $this->belongsTo(Client::class);
     }
 
-    /**
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
-     */
+    public function adminUser(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'admin_user_id');
+    }
+
     public function broker(): BelongsTo
     {
         return $this->belongsTo(Broker::class);
     }
 
-    /**
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
-     */
     public function provider(): BelongsTo
     {
         return $this->belongsTo(Provider::class);
     }
 
-    /**
-     * El Admin que registró la operación
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
-     */
-    public function admin(): BelongsTo
-    {
-        return $this->belongsTo(User::class, 'admin_user_id');
-    }
-
-    /**
-     * Cuenta de Origen
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
-     */
     public function fromAccount(): BelongsTo
     {
         return $this->belongsTo(Account::class, 'from_account_id');
     }
 
-    /**
-     * Cuenta de Destino
-     * @return \Illuminate\Database\Eloquent\Relations\BelongsTo
-     */
     public function toAccount(): BelongsTo
     {
         return $this->belongsTo(Account::class, 'to_account_id');
     }
 
-    /**
-     * Asientos contables generados por esta transacción
-     * @return \Illuminate\Database\Eloquent\Relations\MorphMany
-     */
     public function ledgerEntries(): MorphMany
     {
         return $this->morphMany(LedgerEntry::class, 'transaction');
     }
 
-    //--- Auditoría ---
+    // --- Auditoría ---
 
-    /**
-     * @return \Spatie\Activitylog\LogOptions
-     */
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()
-            ->logFillable() // Loguea todos los campos 'fillable'
+            ->logFillable()
             ->logOnlyDirty()
-            ->setDescriptionForEvent(fn(string $eventName) => "Cambio de Divisa #{$this->number} fue {$eventName}");
+            ->setDescriptionForEvent(fn(string $eventName) => "Intercambio #{$this->number} fue {$eventName}");
     }
-
-    // --- LOCAL SCOPES (FILTROS) ---
-
-    public function scopeClientId(Builder $query, $id): Builder
+    
+    // --- Scopes ---
+    
+    public function scopeCompleted($query)
     {
-        return $query->where('client_id', $id);
-    }
-
-    public function scopeBrokerId(Builder $query, $id): Builder
-    {
-        return $query->where('broker_id', $id);
-    }
-
-    public function scopeProviderId(Builder $query, $id): Builder
-    {
-        return $query->where('provider_id', $id);
-    }
-
-    public function scopeAdminUserId(Builder $query, $id): Builder
-    {
-        return $query->where('admin_user_id', $id);
+        return $query->where('status', 'completed');
     }
 }

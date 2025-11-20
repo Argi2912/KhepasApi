@@ -5,61 +5,74 @@ namespace Database\Seeders;
 use Illuminate\Database\Seeder;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
-use Spatie\Permission\PermissionRegistrar; // 🚨 1. IMPORTAR
+use Spatie\Permission\PermissionRegistrar;
 
 class RolesAndPermissionsSeeder extends Seeder
 {
     public function run(): void
     {
-        // 2. Limpiar caché de permisos
+        // 1. Limpiar caché
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
-        // --- Lista de Permisos ---
+        // 2. Lista Actualizada de Permisos
         $permissions = [
             'manage_tenants',
-            'manage_platforms', // <-- El permiso que necesitas
-            'view_dashboard',
             'manage_users',
             'manage_clients',
-            'manage_requests',
-            'manage_rates',
+            'manage_platforms', // <-- Gestión de plataformas
+            
+            // Nuevos Módulos Financieros
+            'manage_transaction_requests',   // Solicitudes
+            'manage_internal_transactions',  // Caja / Movimientos Internos
+            'manage_exchanges',              // Cambios de Divisa (El motor principal)
+            
+            'view_dashboard',
             'view_statistics',
             'view_database_history',
         ];
 
-        // 3. Crear todos los permisos (Modo Seguro)
         foreach ($permissions as $permissionName) {
             Permission::firstOrCreate(['name' => $permissionName]);
         }
 
-        // --- Asignar Permisos a Roles (Modo Seguro) ---
+        // 3. Asignar Permisos
 
-        // 1. Superadmin
+        // Superadmin
         Role::firstOrCreate(['name' => 'superadmin'])
-            ->syncPermissions(['manage_tenants']); // syncPermissions es más limpio
+            ->syncPermissions(['manage_tenants']);
 
-        // 2. Administrador (del Tenant)
+        // Admin Tenant (Dueño del negocio)
         Role::firstOrCreate(['name' => 'admin_tenant'])
-            ->syncPermissions([ // 🚨 syncPermissions asegura que tenga esta lista
+            ->syncPermissions([
                 'view_dashboard',
                 'manage_users',
                 'manage_clients',
-                'manage_requests',
-                'manage_rates',
+                'manage_platforms',
+                'manage_transaction_requests',
+                'manage_internal_transactions',
+                'manage_exchanges',
                 'view_statistics',
                 'view_database_history',
-                'manage_platforms', // <-- Asignando el permiso
             ]);
 
-        // 3. Cajero
+        // Cajero (Operativo)
         Role::firstOrCreate(['name' => 'cajero'])
-            ->syncPermissions(['view_dashboard', 'manage_requests']);
+            ->syncPermissions([
+                'view_dashboard', 
+                'manage_transaction_requests', // Puede ver solicitudes
+                'manage_exchanges',            // Puede ejecutar cambios
+                'manage_internal_transactions' // Puede registrar gastos menores
+            ]);
 
-        // 4. Analista
+        // Analista (Solo lectura/Auditoría)
         Role::firstOrCreate(['name' => 'analista'])
-            ->syncPermissions(['view_dashboard', 'view_statistics', 'view_database_history']);
+            ->syncPermissions([
+                'view_dashboard', 
+                'view_statistics', 
+                'view_database_history'
+            ]);
             
-        // 5. Corredor
+        // Corredor (Limitado)
         Role::firstOrCreate(['name' => 'corredor'])
             ->syncPermissions(['view_dashboard']);
     }

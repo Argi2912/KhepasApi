@@ -6,20 +6,12 @@ use Illuminate\Database\Seeder;
 
 class DatabaseSeeder extends Seeder
 {
-    /**
-     * Seed the application's database.
-     */
     public function run(): void
     {
         $this->call([
-            // 1. Crear Roles y Permisos PRIMERO
-            RolesAndPermissionsSeeder::class,
-            
-            // 2. Crear el Superadmin Global
-            SuperAdminSeeder::class,
-            
-            // 3. Crear todos los datos de prueba del Tenant
-            DemoTenantSeeder::class,
+            RolesAndPermissionsSeeder::class, // 1. Roles
+            SuperAdminSeeder::class,          // 2. Admin Global
+            DemoTenantSeeder::class,          // 3. Tenant y Datos Operativos
         ]);
     }
 }

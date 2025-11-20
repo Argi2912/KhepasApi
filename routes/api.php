@@ -1,54 +1,42 @@
 <?php
 
-use App\Http\Controllers\Api\AccountController;
-use App\Http\Controllers\Api\AuditLogController;
-
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
-| Controladores de Autenticación y Superadmin
+| Importación de Controladores
 |--------------------------------------------------------------------------
 */
+// Autenticación y Globales
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\BrokerController;
-use App\Http\Controllers\Api\ClientController;
-use App\Http\Controllers\Api\CurrencyController;
-/*
-|--------------------------------------------------------------------------
-| Controladores del Tenant (Cartera y Cuentas)
-|--------------------------------------------------------------------------
-*/
-use App\Http\Controllers\Api\CurrencyExchangeController;
-use App\Http\Controllers\Api\DashboardController;
-use App\Http\Controllers\Api\DollarPurchaseController;
-use App\Http\Controllers\Api\ExchangeRateController;
-use App\Http\Controllers\Api\LedgerEntryController;
-/*
-|--------------------------------------------------------------------------
-| Controladores del Tenant (Lógica de Negocio y Transacciones)
-|--------------------------------------------------------------------------
-*/
-use App\Http\Controllers\Api\PlatformController;
-use App\Http\Controllers\Api\ProviderController;
-use App\Http\Controllers\Api\StatisticsController;
 use App\Http\Controllers\Api\Superadmin\TenantController;
 use App\Http\Controllers\Api\Superadmin\TenantUserController as SuperadminTenantUserController;
 
-/*
-|--------------------------------------------------------------------------
-| Controladores del Tenant (Dashboards y Auditoría)
-|--------------------------------------------------------------------------
-*/
+// Tableros y Reportes
+use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\StatisticsController;
+use App\Http\Controllers\Api\AuditLogController;
+
+// Catálogos (Bases de Datos)
+use App\Http\Controllers\Api\ClientController;
+use App\Http\Controllers\Api\ProviderController;
+use App\Http\Controllers\Api\BrokerController;
+use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\PlatformController;
+use App\Http\Controllers\Api\CurrencyController;
 use App\Http\Controllers\Api\TenantUserController;
-use Illuminate\Support\Facades\Route;
+
+// Operaciones Financieras (El Núcleo)
+use App\Http\Controllers\Api\TransactionRequestController;
+use App\Http\Controllers\Api\InternalTransactionController;
+use App\Http\Controllers\Api\CurrencyExchangeController;
+use App\Http\Controllers\Api\ExchangeRateController;
+use App\Http\Controllers\Api\LedgerEntryController;
 
 /*
 |--------------------------------------------------------------------------
 | 1. RUTAS PÚBLICAS
 |--------------------------------------------------------------------------
-|
-| Rutas para autenticación.
-|
 */
 Route::post('login', [AuthController::class, 'login']);
 
@@ -56,89 +44,98 @@ Route::post('login', [AuthController::class, 'login']);
 |--------------------------------------------------------------------------
 | 2. RUTAS DE SUPERADMIN
 |--------------------------------------------------------------------------
-|
-| Rutas protegidas para el rol 'superadmin'.
-| Estas rutas NO están filtradas por el TenantScope.
-|
 */
 Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'superadmin'], function () {
-    // Gestiona los Tenants (CRUD completo)
     Route::apiResource('tenants', TenantController::class);
-
-                                                                                             // Crea el primer usuario (admin) para un Tenant
-    Route::post('tenants/{tenant}/users', [SuperadminTenantUserController::class, 'store']); // 🚨 USAMOS EL ALIAS
+    Route::post('tenants/{tenant}/users', [SuperadminTenantUserController::class, 'store']);
 });
 
 /*
 |--------------------------------------------------------------------------
-| 3. RUTAS DEL TENANT (AUTENTICADAS)
+| 3. RUTAS DEL TENANT (SISTEMA OPERATIVO)
 |--------------------------------------------------------------------------
-|
-| Rutas protegidas por 'auth:api'. El TenantScope se aplica
-| automáticamente a todos los modelos que usan el trait BelongsToTenant.
-|
 */
 Route::group(['middleware' => ['auth:api']], function () {
 
-    
-    // --- Autenticación y Perfil ---
+    // --- A. Autenticación y Perfil ---
     Route::post('logout', [AuthController::class, 'logout']);
     Route::get('me', [AuthController::class, 'me']);
     Route::post('refresh', [AuthController::class, 'refresh']);
 
-    // --- Módulo 1: Home (Dashboard) ---
+    // --- B. Dashboard y Métricas ---
     Route::get('dashboard/summary', [DashboardController::class, 'getSummary'])
         ->middleware('permission:view_dashboard');
-
-    // --- Módulo 5: Estadísticas ---
+    
     Route::get('statistics/performance', [StatisticsController::class, 'getPerformance'])
         ->middleware('permission:view_statistics');
 
-    // --- Módulo 4: Bases de Datos (Cartera y Cuentas) ---
-    // (Estas rutas son usadas por el Módulo 3 para los <select>)
-    Route::apiResource('clients', ClientController::class);
-    Route::apiResource('providers', ProviderController::class);
-    Route::apiResource('brokers', BrokerController::class);
-    Route::apiResource('accounts', AccountController::class);
-    Route::apiResource('platforms', PlatformController::class);
-
-    // --- Módulo 3: Solicitudes (Transacciones) ---
-
-    
-    Route::apiResource('transactions/currency-exchange', CurrencyExchangeController::class)
-        ->only(['index', 'show', 'store'])
-        ->middleware('permission:manage_requests'); // 'index' y 'show' podrían tener 'view_database_history'
-
-    Route::apiResource('transactions/dollar-purchase', DollarPurchaseController::class)
-        ->only(['index', 'show', 'store'])
-        ->middleware('permission:manage_requests');
-
-    // --- Lógica de Negocio (Tasas) ---
-    // 🚨 1. NUEVA RUTA (Para el store de Pinia y los formularios)
-    // Usamos 'manage_requests' porque el 'cajero' necesita estas tasas.
-    Route::get('rates/all', [ExchangeRateController::class, 'all'])
-         ->middleware('permission:manage_requests');
-
-    // 🚨 2. RUTA DE RECURSO (Para el CRUD de Tasas)
-    // Añadimos 'update' a la lista 'only'.
-    Route::apiResource('rates', ExchangeRateController::class)
-         ->only(['index', 'show', 'store', 'update']) 
-         ->middleware('permission:manage_rates');
+    // --- C. Catálogos y Recursos ---
+    Route::apiResource('clients', ClientController::class)
+        ->middleware('permission:manage_clients');
+        
+    Route::apiResource('providers', ProviderController::class)
+        ->middleware('permission:manage_clients'); 
+        
+    Route::apiResource('brokers', BrokerController::class)
+        ->middleware('permission:manage_users');
+        
+    Route::apiResource('accounts', AccountController::class)
+        ->middleware('permission:manage_exchanges');
+        
+    Route::apiResource('platforms', PlatformController::class)
+        ->middleware('permission:manage_platforms'); 
 
     Route::apiResource('currencies', CurrencyController::class)
-        ->middleware('permission:manage_rates');
+        ->middleware('permission:manage_exchanges');
 
-    // --- Contabilidad (Por Pagar / Por Cobrar) ---
+    // --- D. MÓDULOS FINANCIEROS ---
+
+    // 1. Solicitudes (Buzón)
+    Route::apiResource('transactions/requests', TransactionRequestController::class)
+        ->only(['index', 'store', 'update'])
+        ->middleware('permission:manage_transaction_requests');
+
+    // 2. Transacciones Internas (Caja)
+    Route::apiResource('transactions/internal', InternalTransactionController::class)
+        ->only(['index', 'store', 'show'])
+        ->middleware('permission:manage_internal_transactions');
+
+    // 3. Intercambios de Divisa (Motor Unificado)
+    Route::apiResource('transactions/exchanges', CurrencyExchangeController::class)
+        ->only(['index', 'show', 'store'])
+        ->middleware('permission:manage_exchanges');
+
+    // --- E. Lógica de Negocio (Tasas) ---
+    
+    // Ruta ligera para obtener todas las tasas en el Frontend (Store)
+    Route::get('rates/all', [ExchangeRateController::class, 'all'])
+         ->middleware('permission:manage_exchanges');
+
+    // CRUD de Tasas (Configuración)
+    Route::apiResource('rates', ExchangeRateController::class)
+         ->only(['index', 'show', 'store', 'update']) 
+         ->middleware('permission:manage_exchanges');
+
+    // --- F. Contabilidad y Auditoría (CORREGIDO Y ORDENADO) ---
+    
+    // 1. Resumen de Cuentas (Tarjetas Rojas/Verdes) - IMPORTANTE: Debe ir antes del resource
+    Route::get('ledger/summary', [LedgerEntryController::class, 'summary']);
+
+    // 2. Pagar Deuda
+    Route::post('ledger/{ledger_entry}/pay', [LedgerEntryController::class, 'pay']);
+    
+    // 3. Listado General
     Route::apiResource('ledger', LedgerEntryController::class)
-        ->only(['index', 'show', 'update']); // Solo listar, ver y actualizar (ej. pagar)
+        ->only(['index', 'show', 'update']);
 
-    // --- Auditoría ---
+    // 4. Historial
     Route::get('audit-logs', [AuditLogController::class, 'index'])
         ->middleware('permission:view_database_history');
 
+    // --- G. Gestión de Usuarios ---
     Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])
         ->middleware('permission:manage_users');
-                                                             // --- Gestión de Usuarios (del Tenant) ---
-    Route::apiResource('users', TenantUserController::class) // 🚨 USAMOS EL CONTROLADOR CORRECTO
+        
+    Route::apiResource('users', TenantUserController::class)
         ->middleware('permission:manage_users');
 });

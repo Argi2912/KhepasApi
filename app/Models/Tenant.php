@@ -50,4 +50,33 @@ class Tenant extends Model
     {
         return $this->hasMany(Provider::class);
     }
+
+   public function transactionRequests(): HasMany
+    {
+        return $this->hasMany(TransactionRequest::class);
+    }
+
+    /**
+     * Movimientos internos de caja
+     */
+    public function internalTransactions(): HasMany
+    {
+        return $this->hasMany(InternalTransaction::class);
+    }
+
+    /**
+     * Intercambios de divisa
+     */
+    public function currencyExchanges(): HasMany
+    {
+        return $this->hasMany(CurrencyExchange::class);
+    }
+    
+    /**
+     * Plataformas del tenant
+     */
+    public function platforms(): HasMany
+    {
+        return $this->hasMany(Platform::class);
+    }
 }

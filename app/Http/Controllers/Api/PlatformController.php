@@ -26,7 +26,15 @@ class PlatformController extends Controller
     {
         // 1. Validar la entrada
         $validatedData = $request->validate([
-            'name' => 'required|string|max:255',
+            // 🚨 VALIDACIÓN MEJORADA
+            'name' => [
+                'required',
+                'string',
+                'max:255',
+                // Asegurar que el nombre sea único en la tabla 'platforms',
+                // pero solo donde 'tenant_id' sea el del usuario actual.
+                Rule::unique('platforms')->where('tenant_id', auth()->user()->tenant_id)
+            ],
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:50',
         ]);
@@ -57,9 +65,18 @@ class PlatformController extends Controller
      */
     public function update(Request $request, Platform $platform)
     {
-        // 1. Validar la entrada (similar a store)
         $validatedData = $request->validate([
-            'name' => 'required|string|max:255',
+            // 🚨 VALIDACIÓN MEJORADA
+            'name' => [
+                'required',
+                'string',
+                'max:255',
+                // Igual que en store, pero debe ignorar el ID de la plataforma
+                // que estamos actualizando (para no fallar consigo mismo).
+                Rule::unique('platforms')
+                    ->where('tenant_id', auth()->user()->tenant_id)
+                    ->ignore($platform->id)
+            ],
             'email' => 'nullable|email|max:255',
             'phone' => 'nullable|string|max:50',
         ]);
