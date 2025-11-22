@@ -26,6 +26,8 @@ class InternalTransaction extends Model
         'amount',
         'description',
         'transaction_date',
+        'dueño',        // Nuevo campo para el dueño
+        'person_name',  // Nuevo campo para el nombre de la persona
     ];
 
     protected $casts = [

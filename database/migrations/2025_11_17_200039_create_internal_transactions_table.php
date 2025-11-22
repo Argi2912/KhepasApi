@@ -29,6 +29,11 @@ return new class extends Migration
             $table->text('description')->nullable(); // "Pago de luz oficina"
             $table->timestamp('transaction_date')->useCurrent(); // Fecha real del movimiento
             $table->timestamps();
+
+            // Nuevos campos para dueño y nombre de persona
+            $table->text('dueño')->nullable(); // O '->string('dueño')->notNullable();' si es obligatorio
+            $table->text('person_name')->nullable(); // O '->string('person_name')->notNullable();' si es obligatorio
+
         });
     }
 

@@ -30,7 +30,7 @@ return new class extends Migration
             $table->decimal('amount_sent', 14, 2)->comment('Monto que sale de la cuenta origen');
             $table->decimal('amount_received', 14, 2)->comment('Monto que entra a la cuenta destino');
             $table->decimal('exchange_rate', 16, 8)->comment('Tasa manual aplicada'); // Más decimales para precisión cripto
-            $table->decimal('buy_rate', 16, 8)->comment('Tasa manual aplicada'); // Más decimales para precisión cripto
+            $table->decimal('buy_rate', 16, 8)->nullable()->comment('Tasa manual aplicada'); // Más decimales para precisión cripto
 
 
             // --- Comisiones (Montos Exactos para contabilidad) ---
