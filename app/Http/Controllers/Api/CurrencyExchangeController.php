@@ -62,8 +62,12 @@ class CurrencyExchangeController extends Controller
             'amount_received'       => 'required|numeric|min:0.01',
             'commission_charged_pct'  => 'nullable|numeric|min:0',
             'commission_provider_pct' => 'nullable|numeric|min:0',
+            
+            // 🚨 NUEVO: Validación para porcentaje del Broker
+            'commission_broker_pct'   => 'nullable|numeric|min:0', 
+
             'reference_id'          => 'nullable|string|max:255',
-            'delivered'             => 'sometimes|boolean', // NUEVO
+            'delivered'             => 'sometimes|boolean', 
         ];
 
         if ($request->operation_type === 'exchange') {
@@ -80,20 +84,29 @@ class CurrencyExchangeController extends Controller
 
         $dataToService = $validatedData;
 
+        // Mapeo de datos opcionales
         $dataToService['buy_rate'] = $request->get('buy_rate', null);
         $dataToService['received_rate'] = $request->get('received_rate', null);
         $dataToService['platform_id'] = $request->get('platform_id', null);
+        
+        // Porcentajes
         $dataToService['commission_admin_pct'] = $request->get('commission_admin_pct', 0);
+        $dataToService['commission_broker_pct'] = $request->get('commission_broker_pct', 0); // 🚨 NUEVO
 
+        // Montos Monetarios (Calculados en Frontend)
+        // Nota: commission_charged_amount del front se guarda como commission_total_amount en BD
         $dataToService['commission_total_amount'] = $request->get('commission_charged_amount', 0);
         $dataToService['commission_provider_amount'] = $request->get('commission_provider_amount', 0);
         $dataToService['commission_admin_amount'] = $request->get('commission_admin_amount', 0);
+        
+        // 🚨 NUEVO: Capturar el monto del Broker para pasarlo al servicio
+        $dataToService['commission_broker_amount'] = $request->get('commission_broker_amount', 0);
 
         // Estado según entrega física (solo en compras)
         if ($request->operation_type === 'purchase') {
             $dataToService['status'] = $request->boolean('delivered', true) ? 'completed' : 'pending';
             $dataToService['exchange_rate'] = $dataToService['received_rate'];
-            $dataToService['buy_rate'] = $dataToService['buy_rate'];
+            // $dataToService['buy_rate'] ya está asignado arriba
         } else {
             $dataToService['status'] = 'completed';
         }
@@ -118,18 +131,15 @@ class CurrencyExchangeController extends Controller
         }
 
         $user = Auth::user();
-        // 🚨 PASO CLAVE: Forzamos la carga de la relación 'roles' para asegurar que existan
         $user->load('roles'); 
 
-        // Extraemos los nombres
         $userRoles = $user->roles->pluck('name')->toArray();
         
         $allowedRoles = ['admin', 'cashier', 'admin_tenant', 'superadmin'];
         if (empty(array_intersect($userRoles, $allowedRoles))) {
-            // Devolvemos los roles detectados en el mensaje para que veas por qué falla
             return response()->json([
                 'message' => 'No tienes permiso para realizar esta acción.',
-                'debug_roles_detected' => $userRoles // <--- Esto te dirá qué roles ve el sistema
+                'debug_roles_detected' => $userRoles 
             ], 403);
         }
 

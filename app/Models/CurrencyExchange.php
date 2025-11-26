@@ -25,6 +25,7 @@ class CurrencyExchange extends Model
         'admin_user_id',    // Quien registra
         'broker_id',        // Opcional
         'provider_id',      // Opcional
+        'platform_id',      // Plataforma usada (Ej: Binance, Coinbase, etc.)
         
         // Flujo de Dinero
         'from_account_id',  // Cuenta que envía (Sale dinero)
@@ -40,6 +41,7 @@ class CurrencyExchange extends Model
         'commission_total_amount',
         'commission_provider_amount',
         'commission_admin_amount',
+        'commission_broker_amount',
         
         // Trazabilidad
         'trader_info',      // Ej: Pepito27 - Binance
