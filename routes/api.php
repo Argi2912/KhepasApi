@@ -32,6 +32,7 @@ use App\Http\Controllers\Api\InternalTransactionController;
 use App\Http\Controllers\Api\CurrencyExchangeController;
 use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\LedgerEntryController;
+use App\Http\Controllers\Api\Superadmin\ActivityLogController;
 
 /*
 |--------------------------------------------------------------------------
@@ -46,8 +47,12 @@ Route::post('login', [AuthController::class, 'login']);
 |--------------------------------------------------------------------------
 */
 Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'superadmin'], function () {
+    Route::get('/stats', [TenantController::class, 'dashboardStats']);
     Route::apiResource('tenants', TenantController::class);
-    Route::post('tenants/{tenant}/users', [SuperadminTenantUserController::class, 'store']);
+    Route::patch('/tenants/{tenant}/toggle', [TenantController::class, 'toggleStatus']);
+    //Route::post('tenants/{tenant}/users', [SuperadminTenantUserController::class, 'store']);
+
+    Route::get('/logs', [ActivityLogController::class, 'index']);
 });
 
 /*

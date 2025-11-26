@@ -1,114 +1,115 @@
 <?php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\DollarPurchase;
+use App\Models\InternalTransaction;
 use App\Models\CurrencyExchange;
-use App\Models\Broker;
-use App\Models\Client;
-use App\Models\Provider;
-use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Auth;
+use Carbon\Carbon;
 
 class StatisticsController extends Controller
 {
-    /**
-     * Devuelve estadísticas filtrables y KPIs (Módulo 5).
-     */
     public function getPerformance(Request $request)
     {
-        $request->validate([
-            'start_date' => 'nullable|date',
-            'end_date' => 'nullable|date|after_or_equal:start_date',
-            'broker_id' => 'nullable|exists:brokers,id',
-            'client_id' => 'nullable|exists:clients,id',
-        ]);
+        // 1. Definir rango de fechas (Por defecto: Año actual)
+        $year = $request->input('year', date('Y'));
+        $startDate = Carbon::createFromDate($year, 1, 1)->startOfYear();
+        $endDate = Carbon::createFromDate($year, 12, 31)->endOfYear();
+
+        // ---------------------------------------------------------
+        // A. INGRESOS (Income)
+        // ---------------------------------------------------------
         
-        $tenantId = Auth::guard('api')->user()->tenant_id;
+        // A1. Ingresos por Movimientos Internos (Caja)
+        $internalIncome = InternalTransaction::selectRaw('MONTH(transaction_date) as month, SUM(amount) as total')
+            ->where('type', 'income')
+            ->whereBetween('transaction_date', [$startDate, $endDate])
+            ->groupBy('month')
+            ->pluck('total', 'month')
+            ->toArray();
 
-        // --- 1. KPIs (Conteos Totales del Tenant) ---
-        // El TenantScope se aplica automáticamente a estos modelos
-        $kpis = [
-            'total_clients' => Client::count(),
-            'total_providers' => Provider::count(),
-            'total_brokers' => Broker::count(),
-            'total_users' => User::where('tenant_id', $tenantId)->count(), // User no tiene Scope global
-        ];
+        // A2. Ingresos por Comisiones de Cambios (La ganancia del negocio)
+        // Sumamos commission_total_amount (lo que se cobró al cliente)
+        // Ojo: Si quieres descontar lo que pagaste al provider, usa (commission_total_amount - commission_provider_amount)
+        $exchangeIncome = CurrencyExchange::selectRaw('MONTH(created_at) as month, SUM(commission_total_amount) as total')
+            ->where('status', 'completed')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->groupBy('month')
+            ->pluck('total', 'month')
+            ->toArray();
 
+        // ---------------------------------------------------------
+        // B. EGRESOS (Expenses)
+        // ---------------------------------------------------------
 
-        // --- 2. Producción por Corredor (Ranking) ---
-        // (Usando DollarPurchase como ejemplo de volumen)
-        $production_by_broker = Broker::query()
-            ->join('dollar_purchases', 'brokers.id', '=', 'dollar_purchases.broker_id')
-            ->join('users', 'brokers.user_id', '=', 'users.id')
-            ->select('brokers.id', DB::raw('COALESCE(brokers.name, users.name) as broker_name'), DB::raw('SUM(dollar_purchases.amount_received) as total_volume'))
-            ->when($request->start_date, fn($q) => $q->whereDate('dollar_purchases.created_at', '>=', $request->start_date))
-            ->when($request->end_date, fn($q) => $q->whereDate('dollar_purchases.created_at', '<=', $request->end_date))
-            ->when($request->client_id, fn($q) => $q->where('dollar_purchases.client_id', $request->client_id))
-            ->when($request->broker_id, fn($q) => $q->where('brokers.id', $request->broker_id))
-            ->groupBy('brokers.id', 'broker_name')
-            ->orderBy('total_volume', 'desc')
+        // B1. Gastos Operativos (Sueldos, Servicios, Alquiler)
+        $expenses = InternalTransaction::selectRaw('MONTH(transaction_date) as month, SUM(amount) as total')
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startDate, $endDate])
+            ->groupBy('month')
+            ->pluck('total', 'month')
+            ->toArray();
+
+        // ---------------------------------------------------------
+        // C. PROCESAMIENTO DE DATOS PARA CHART.JS
+        // ---------------------------------------------------------
+
+        $labels = [];
+        $dataIncome = [];
+        $dataExpense = [];
+        $netProfit = [];
+
+        // Iteramos los 12 meses para llenar ceros donde no hubo movimiento
+        for ($i = 1; $i <= 12; $i++) {
+            $monthName = Carbon::create()->month($i)->translatedFormat('F'); // Enero, Febrero...
+            $labels[] = ucfirst($monthName);
+
+            // Sumar Ingresos Internos + Comisiones de Cambios
+            $inc = ($internalIncome[$i] ?? 0) + ($exchangeIncome[$i] ?? 0);
+            $exp = $expenses[$i] ?? 0;
+
+            $dataIncome[] = round($inc, 2);
+            $dataExpense[] = round($exp, 2);
+            $netProfit[] = round($inc - $exp, 2);
+        }
+
+        // ---------------------------------------------------------
+        // D. DATOS ADICIONALES (Distribución de Gastos)
+        // ---------------------------------------------------------
+        $expensesByCategory = InternalTransaction::selectRaw('category, SUM(amount) as total')
+            ->where('type', 'expense')
+            ->whereBetween('transaction_date', [$startDate, $endDate])
+            ->groupBy('category')
+            ->orderByDesc('total')
+            ->limit(5) // Top 5 categorías
             ->get();
-            
-            
-        // --- 3. Registros de Usuarios (Mensual) ---
-        $user_registrations_monthly = User::query()
-            ->where('tenant_id', $tenantId) // Filtro manual para User
-            ->select(
-                DB::raw('YEAR(created_at) as year'),
-                DB::raw('MONTH(created_at) as month'),
-                DB::raw('COUNT(id) as count')
-            )
-            ->when($request->start_date, fn($q) => $q->whereDate('created_at', '>=', $request->start_date))
-            ->when($request->end_date, fn($q) => $q->whereDate('created_at', '<=', $request->end_date))
-            ->groupBy('year', 'month')
-            ->orderBy('year', 'desc')
-            ->orderBy('month', 'desc')
-            ->get();
-            
 
-        // --- 4. Ganancias Mensuales (Simple) ---
-        // Definición de "Ganancia": Suma de 'commission_admin_pct' de CurrencyExchange
-        $monthly_profits = CurrencyExchange::query()
-            ->select(
-                DB::raw('YEAR(created_at) as year'),
-                DB::raw('MONTH(created_at) as month'),
-                DB::raw('SUM(amount_received * (commission_admin_pct / 100)) as total_profit')
-            )
-            ->when($request->start_date, fn($q) => $q->whereDate('created_at', '>=', $request->start_date))
-            ->when($request->end_date, fn($q) => $q->whereDate('created_at', '<=', $request->end_date))
-            ->groupBy('year', 'month')
-            ->orderBy('year', 'desc')
-            ->orderBy('month', 'desc')
-            ->get();
-
-
-        // --- 5. Volumen Total Procesado (General) ---
-        $total_volume_exchange = CurrencyExchange::query()
-            ->when($request->start_date, fn($q) => $q->whereDate('created_at', '>=', $request->start_date))
-            ->when($request->end_date, fn($q) => $q->whereDate('created_at', '<=', $request->end_date))
-            ->sum('amount_received');
-            
-        $total_volume_purchase = DollarPurchase::query()
-            ->when($request->start_date, fn($q) => $q->whereDate('created_at', '>=', $request->start_date))
-            ->when($request->end_date, fn($q) => $q->whereDate('created_at', '<=', $request->end_date))
-            ->sum('amount_received');
-
-        
         return response()->json([
-            'kpis' => $kpis,
-            'filters' => $request->only(['start_date', 'end_date', 'broker_id', 'client_id']),
-            'total_volume' => [
-                'exchange' => $total_volume_exchange,
-                'purchase' => $total_volume_purchase,
+            'chart_data' => [
+                'labels' => $labels,
+                'datasets' => [
+                    [
+                        'label' => 'Ingresos Totales',
+                        'data' => $dataIncome,
+                        'backgroundColor' => '#10B981', // Verde
+                        'borderColor' => '#10B981',
+                    ],
+                    [
+                        'label' => 'Gastos Operativos',
+                        'data' => $dataExpense,
+                        'backgroundColor' => '#EF4444', // Rojo
+                        'borderColor' => '#EF4444',
+                    ]
+                ]
             ],
-            'metrics' => [
-                'production_by_broker' => $production_by_broker,
-                'user_registrations_monthly' => $user_registrations_monthly,
-                'monthly_profits_simple' => $monthly_profits,
-            ]
+            'summary' => [
+                'total_income' => array_sum($dataIncome),
+                'total_expense' => array_sum($dataExpense),
+                'total_profit' => array_sum($netProfit),
+            ],
+            'expenses_by_category' => $expensesByCategory
         ]);
     }
 }
