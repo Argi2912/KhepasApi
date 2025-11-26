@@ -12,22 +12,39 @@ use App\Models\Provider;
 use App\Models\Broker;
 use App\Models\Account;
 use App\Models\Currency;
-use App\Models\InternalTransaction; // 🚨 Nueva Modelo
-use App\Models\TransactionRequest;  // 🚨 Nueva Modelo
-use App\Models\CurrencyExchange;    // 🚨 Modelo Actualizado
-use App\Services\TransactionService; 
+use App\Models\Platform;
+use App\Models\InternalTransaction;
+use App\Models\CurrencyExchange;
+use App\Models\LedgerEntry;
 
 class DemoTenantSeeder extends Seeder
 {
     public function run(): void
     {
+        // Ejecutamos todo en una transacción para velocidad y seguridad
         DB::transaction(function () {
             
-            // --- 1. Crear el Tenant ---
-            $tenant = Tenant::create(['name' => 'Estudio Kephas (Demo)']);
+            // =========================================================================
+            // 1. TENANT Y CONFIGURACIÓN INICIAL
+            // =========================================================================
+            $tenant = Tenant::create(['name' => 'Estudio Kephas (Producción Demo)']);
             $tenantId = $tenant->id;
 
-            // --- 2. Crear Usuarios ---
+            // =========================================================================
+            // 2. USUARIOS DEL SISTEMA (STAFF)
+            // =========================================================================
+            
+
+                
+
+            $analista = User::create([
+                'tenant_id' => $tenantId,
+                'name' => 'Analista Kephas',
+                'email' => 'analista@kephas.com',
+                'password' => Hash::make('password'),
+            ])->assignRole('analista');
+
+            // Admin Principal
             $admin = User::create([
                 'tenant_id' => $tenantId,
                 'name' => 'Admin Kephas',
@@ -36,184 +53,228 @@ class DemoTenantSeeder extends Seeder
             ]);
             $admin->assignRole('admin_tenant');
 
-            $cajero = User::create([
+            // Cajeros (Operativos)
+            $cajero1 = User::create([
                 'tenant_id' => $tenantId,
                 'name' => 'Cajero Kephas',
                 'email' => 'cajero@kephas.com',
                 'password' => Hash::make('password'),
             ])->assignRole('cajero');
 
+            $cajero2 = User::create([
+                'tenant_id' => $tenantId,
+                'name' => 'Maria Caja',
+                'email' => 'cajero.maria@khepas.com',
+                'password' => Hash::make('password'),
+            ])->assignRole('cajero');
+
+            // Analista (Auditoría)
             $analista = User::create([
                 'tenant_id' => $tenantId,
-                'name' => 'Analista Kephas',
-                'email' => 'analista@kephas.com',
+                'name' => 'Pedro Analista',
+                'email' => 'analista.pedro@khepas.com',
                 'password' => Hash::make('password'),
             ])->assignRole('analista');
-            
-            $corredorUser = User::create([
-                'tenant_id' => $tenantId,
-                'name' => 'Corredor Externo',
-                'email' => 'corredor@kephas.com',
-                'password' => Hash::make('password'),
-            ])->assignRole('corredor');
 
-            // --- 3. Crear Divisas ---
+            // =========================================================================
+            // 3. CATALOGOS FINANCIEROS (Monedas, Plataformas, Brokers)
+            // =========================================================================
+
+            // Divisas
             $currencies = [
                 ['code' => 'USD', 'name' => 'Dólar Americano'],
-                ['code' => 'USDT', 'name' => 'Tether (Binance)'],
-                ['code' => 'VES', 'name' => 'Bolívar Soberano'],
+                ['code' => 'USDT', 'name' => 'Tether (USDT)'],
+                ['code' => 'VES', 'name' => 'Bolívar Digital'],
                 ['code' => 'EUR', 'name' => 'Euro'],
+                ['code' => 'COP', 'name' => 'Peso Colombiano'],
             ];
-            foreach ($currencies as $data) {
-                Currency::create(['tenant_id' => $tenantId] + $data); 
+            foreach ($currencies as $c) Currency::create(['tenant_id' => $tenantId] + $c);
+
+            // Plataformas (Bancos / Pasarelas)
+            $platforms = [
+                ['name' => 'Zelle', 'email' => 'pagos@zelle.com'],
+                ['name' => 'Binance Pay', 'email' => 'merchant@binance.com'],
+                ['name' => 'Banesco Panamá', 'email' => null],
+                ['name' => 'Banesco Venezuela', 'email' => null],
+                ['name' => 'Efectivo Oficina', 'email' => null],
+                ['name' => 'Mercantil', 'email' => null],
+            ];
+            $dbPlatforms = [];
+            foreach ($platforms as $p) {
+                $dbPlatforms[] = Platform::create(['tenant_id' => $tenantId] + $p);
             }
 
-            // --- 4. Crear Broker ---
-            $broker = Broker::create([
-                'tenant_id' => $tenantId,
-                'user_id' => $corredorUser->id,
-                'default_commission_rate' => 1.5,
-            ]);
+            // Brokers (Corredores Independientes)
+            $brokersData = [
+                ['name' => 'Inversiones Los Andes', 'email' => 'contacto@andes.com', 'rate' => 1.5],
+                ['name' => 'CryptoFast Broker', 'email' => 'dealers@cryptofast.com', 'rate' => 0.5],
+                ['name' => 'Consultora Financiera Global', 'email' => 'finanzas@global.com', 'rate' => 2.0],
+            ];
+            $dbBrokers = [];
+            foreach ($brokersData as $b) {
+                $dbBrokers[] = Broker::create([
+                    'tenant_id' => $tenantId,
+                    'name' => $b['name'],
+                    'email' => $b['email'],
+                    'default_commission_rate' => $b['rate']
+                ]);
+            }
 
-            // --- 5. Crear Cuentas (Caja) ---
-            $accountZelle = Account::create([
-                'tenant_id' => $tenantId,
-                'name' => 'Zelle (Corporativo)',
-                'currency_code' => 'USD',
-                'balance' => 15000,
-            ]);
+            // =========================================================================
+            // 4. CUENTAS BANCARIAS Y CAJA (Saldos Iniciales)
+            // =========================================================================
             
-            $accountBinance = Account::create([
-                'tenant_id' => $tenantId,
-                'name' => 'Binance (USDT)',
-                'currency_code' => 'USDT',
-                'balance' => 30000,
-            ]);
+            $accCajaFuerte = Account::create(['tenant_id' => $tenantId, 'name' => 'Caja Fuerte (USD)', 'currency_code' => 'USD', 'balance' => 15000.00]);
+            $accZelleCorp  = Account::create(['tenant_id' => $tenantId, 'name' => 'Zelle Corporativo', 'currency_code' => 'USD', 'balance' => 5800.00]);
+            $accBinance    = Account::create(['tenant_id' => $tenantId, 'name' => 'Binance Wallet Funding', 'currency_code' => 'USDT', 'balance' => 45000.00]);
+            $accBanesco    = Account::create(['tenant_id' => $tenantId, 'name' => 'Banesco Nacional', 'currency_code' => 'VES', 'balance' => 250000.00]);
+            $accEuros      = Account::create(['tenant_id' => $tenantId, 'name' => 'Caja Euros', 'currency_code' => 'EUR', 'balance' => 2000.00]);
+
+            // =========================================================================
+            // 5. CARTERA (Clientes y Proveedores)
+            // =========================================================================
             
-            $accountEfectivo = Account::create([
-                'tenant_id' => $tenantId,
-                'name' => 'Caja Fuerte (Oficina)',
-                'currency_code' => 'USD',
-                'balance' => 5000,
-            ]);
+            // Creamos 15 clientes diversos
+            $clients = Client::factory(15)->create(['tenant_id' => $tenantId]);
             
-            $accountVes = Account::create([
-                'tenant_id' => $tenantId,
-                'name' => 'Banesco (VES)',
-                'currency_code' => 'VES',
-                'balance' => 100000, // ~2000 USD aprox
-            ]);
+            // Proveedores de Liquidez
+            $prov1 = Provider::factory()->create(['tenant_id' => $tenantId, 'name' => 'Liquidez Mayorista A']);
+            $prov2 = Provider::factory()->create(['tenant_id' => $tenantId, 'name' => 'Cambios La Frontera']);
 
-            // --- 6. Crear Clientes y Proveedores ---
-            $client = Client::factory()->create(['tenant_id' => $tenantId, 'name' => 'Cliente Frecuente 1']);
-            $provider = Provider::factory()->create(['tenant_id' => $tenantId, 'name' => 'Proveedor Liquidez A']);
-            Client::factory(5)->create(['tenant_id' => $tenantId]);
+            // =========================================================================
+            // 6. GENERACIÓN DE TRANSACCIONES (HISTÓRICO Y RECIENTE)
+            // =========================================================================
 
-            // ============================================================
-            // 🚨 NUEVA LÓGICA DE TRANSACCIONES (SIMULACIÓN)
-            // ============================================================
-
-            // A. SIMULACIÓN: Transacción Interna (Ingreso de Capital)
+            // A. MOVIMIENTOS INTERNOS (Gastos de Oficina, Ingresos Capital)
+            // -------------------------------------------------------------
+            // Ingreso Inicial
             InternalTransaction::create([
                 'tenant_id' => $tenantId,
                 'user_id' => $admin->id,
-                'account_id' => $accountEfectivo->id, // Entra a caja fuerte
+                'account_id' => $accCajaFuerte->id,
                 'type' => 'income',
-                'category' => 'Aporte Capital',
-                'amount' => 2000,
-                'description' => 'Aporte extra de socio para liquidez',
-                'transaction_date' => now()->subDays(2),
+                'category' => 'Capital Inicial',
+                'amount' => 10000,
+                'description' => 'Aporte de socios',
+                'transaction_date' => now()->subMonth(),
             ]);
 
-            // B. SIMULACIÓN: Registro de Solicitud (Cliente quiere cambiar)
-            TransactionRequest::create([
-                'tenant_id' => $tenantId,
-                'client_id' => $client->id,
-                'type' => 'exchange',
-                'source_origin' => 'Zelle Wells Fargo',
-                'destination_target' => 'Efectivo Oficina',
-                'amount' => 500,
-                'currency_code' => 'USD',
-                'status' => 'pending',
-                'notes' => 'El cliente pasará en la tarde.',
-            ]);
+            // Algunos gastos aleatorios en el último mes
+            for ($i = 0; $i < 8; $i++) {
+                InternalTransaction::create([
+                    'tenant_id' => $tenantId,
+                    'user_id' => $cajero1->id,
+                    'account_id' => $accBanesco->id,
+                    'type' => 'expense',
+                    'category' => $i % 2 == 0 ? 'Servicios' : 'Nómina',
+                    'amount' => rand(500, 2000),
+                    'description' => 'Pago operativo #' . $i,
+                    'transaction_date' => now()->subDays(rand(1, 30)),
+                ]);
+            }
 
-            // C. SIMULACIÓN: Cambio de Divisa (Ejecutado)
-            // Caso: Cliente entrega 100 USDT y recibe VES.
-            // Tasa Manual: 45.00 VES/USDT
+            // B. OPERACIONES DE CAMBIO (EXCHANGES & PURCHASES)
+            // ------------------------------------------------
+            // Generamos 20 transacciones simuladas
             
-            $amountReceivedFromClient = 100; // Entra a nuestra Binance
-            $rate = 45.00;
-            $amountSentToClient = 4500; // Sale de nuestro Banesco (100 * 45)
-            
-            // Comisiones (Calculadas manualmente para el ejemplo)
-            // Digamos que cobramos 2 USDT de comisión total.
-            // El cliente envía 102, nosotros cambiamos 100. O descontamos del envío.
-            // Asumamos modelo: Cliente envía 100, cobramos 2%, cambiamos 98.
-            // PERO, para simplificar este registro, usaremos montos directos.
+            foreach (range(1, 20) as $index) {
+                // Alternar tipo de operación
+                $type = $index % 3 == 0 ? 'purchase' : 'exchange'; // 1 de cada 3 es compra
+                $status = $index > 15 ? 'pending' : 'completed'; // Las últimas 5 pendientes
+                
+                $client = $clients->random();
+                $broker = rand(0, 1) ? $dbBrokers[array_rand($dbBrokers)] : null; // 50% chance de broker
+                $adminUser = rand(0, 1) ? $cajero1 : $cajero2;
+                
+                // Configurar datos según tipo
+                if ($type === 'exchange') {
+                    // Intercambio: USDT -> VES
+                    $from = $accBinance;
+                    $to = $accBanesco;
+                    $amountSent = rand(100, 1000);
+                    $rate = 45.50 + (rand(0, 10) / 10); // Tasa variable
+                    $amountReceived = $amountSent * $rate;
+                    
+                    // Comisiones
+                    $commCharged = $amountSent * 0.02; // 2%
+                    $commBroker = $broker ? $amountSent * 0.005 : 0; // 0.5% si hay broker
+                    
+                } else {
+                    // Compra: Cliente da Zelle, recibe Efectivo USD
+                    $from = $accCajaFuerte;
+                    $to = $accZelleCorp;
+                    $amountReceived = rand(500, 2000); // Entra Zelle
+                    $rate = 1.03; // Costo por Zelle
+                    $amountSent = $amountReceived / $rate; // Sale menos efectivo
+                    
+                    $commCharged = 20; // Fijo
+                    $commBroker = 0;
+                }
 
-            CurrencyExchange::create([
-                'tenant_id' => $tenantId,
-                'number' => 'CE-00001',
-                
-                // Actores
-                'client_id' => $client->id,
-                'admin_user_id' => $cajero->id,
-                'broker_id' => $broker->id,
-                'provider_id' => null, // Sin proveedor externo
-                
-                // Flujo de Dinero (Perspectiva de NUESTRAS cuentas)
-                'to_account_id' => $accountBinance->id, // Entra dinero (USDT)
-                'from_account_id' => $accountVes->id,   // Sale dinero (VES)
-                
-                // Valores Manuales
-                'amount_received' => 100.00,  // Entraron 100 USDT
-                'amount_sent' => 4500.00,     // Salieron 4500 VES (Neto entregado)
-                'exchange_rate' => 45.00,     // Tasa del momento
-                
-                // Comisiones (Montos, no %)
-                'commission_total_amount' => 2.00, // Ganamos 2 USDT en la operación (implícito o explícito)
-                'commission_provider_amount' => 0,
-                'commission_admin_amount' => 2.00,
+                $tx = CurrencyExchange::create([
+                    'tenant_id' => $tenantId,
+                    'number' => 'CE-' . str_pad($index, 5, '0', STR_PAD_LEFT),
+                    'client_id' => $client->id,
+                    'broker_id' => $broker?->id,
+                    'provider_id' => null,
+                    'admin_user_id' => $adminUser->id,
+                    
+                    'from_account_id' => $from->id,
+                    'to_account_id' => $to->id,
+                    
+                    'amount_sent' => $amountSent,
+                    'amount_received' => $amountReceived,
+                    
+                    // En purchase, exchange_rate suele ser la tasa base de compra
+                    'exchange_rate' => $rate, 
+                    
+                    'commission_total_amount' => $commCharged,
+                    'commission_provider_amount' => 0,
+                    'commission_admin_amount' => 0,
+                    
+                    'status' => $status,
+                    'created_at' => now()->subDays(rand(0, 45)), // Distribuidas en 45 días
+                ]);
 
-                // Trazabilidad
-                'trader_info' => 'JuanPerez - Binance P2P',
-                'reference_id' => 'TX-BIN-99887766',
-                'status' => 'completed'
-            ]);
+                // C. GENERAR DEUDAS / LEDGER (Solo para completadas y algunas pendientes)
+                // ----------------------------------------------------------------------
+                
+                // 1. Comisión Ganada (Cuenta por Cobrar al Cliente - Simulamos que ya se cobró o se debe)
+                if ($commCharged > 0) {
+                    $ledgerStatus = $status === 'completed' ? 'paid' : 'pending';
+                    LedgerEntry::create([
+                        'tenant_id' => $tenantId,
+                        'transaction_type' => CurrencyExchange::class,
+                        'transaction_id' => $tx->id,
+                        'entity_type' => Client::class,
+                        'entity_id' => $client->id,
+                        'type' => 'receivable',
+                        'status' => $ledgerStatus,
+                        'amount' => $commCharged,
+                        'description' => "Comisión Op #{$tx->number}",
+                        'created_at' => $tx->created_at
+                    ]);
+                }
 
-            // D. SIMULACIÓN: Compra de Divisa (Cliente paga VES, quiere USD Efectivo)
-            // Tasa: 46.00 (Venta es más cara)
-            
-            CurrencyExchange::create([
-                'tenant_id' => $tenantId,
-                'number' => 'CE-00002',
-                
-                'client_id' => $client->id,
-                'admin_user_id' => $cajero->id,
-                'broker_id' => null,
-                'provider_id' => null,
-                
-                // Flujo
-                'to_account_id' => $accountVes->id,      // Entran VES
-                'from_account_id' => $accountEfectivo->id, // Salen USD Efectivo
-                
-                // Valores
-                'amount_received' => 9200.00, // Cliente paga 9200 VES
-                'amount_sent' => 200.00,      // Cliente recibe 200 USD (9200 / 46)
-                'exchange_rate' => 46.00,
-                
-                'commission_total_amount' => 5.00, // Comisión en divisa origen (VES) o destino?
-                                                   // Usualmente se registra en la moneda base del reporte.
-                                                   // Asumamos valor nominal referencial.
-                'commission_provider_amount' => 0,
-                'commission_admin_amount' => 5.00,
-
-                'trader_info' => 'Caja Principal',
-                'reference_id' => 'RECIBO-FISICO-001',
-                'status' => 'completed'
-            ]);
-
+                // 2. Comisión Broker (Cuenta por Pagar - Simulamos deuda)
+                if ($broker && $commBroker > 0) {
+                    // Dejamos algunas pagadas y otras pendientes
+                    $brokerLedgerStatus = rand(0, 1) ? 'paid' : 'pending';
+                    
+                    LedgerEntry::create([
+                        'tenant_id' => $tenantId,
+                        'transaction_type' => CurrencyExchange::class,
+                        'transaction_id' => $tx->id,
+                        'entity_type' => Broker::class,
+                        'entity_id' => $broker->id,
+                        'type' => 'payable',
+                        'status' => $brokerLedgerStatus,
+                        'amount' => $commBroker,
+                        'description' => "Comisión Broker {$broker->name} - Ref {$tx->number}",
+                        'created_at' => $tx->created_at
+                    ]);
+                }
+            }
         });
     }
 }

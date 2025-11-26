@@ -14,8 +14,11 @@ return new class extends Migration
         Schema::create('brokers', function (Blueprint $table) {
             $table->id();
             $table->foreignId('tenant_id')->constrained('tenants')->onDelete('cascade');
-            // Un Corredor (Broker) es también un Usuario
-            $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
+            // 🚨 CAMBIO: Datos propios del Broker (Ya no usa user_id)
+            $table->string('name'); 
+            $table->string('email')->nullable();
+            $table->string('document_id')->nullable(); // Cédula, RIF o Pasaporte
+            
             $table->decimal('default_commission_rate', 5, 2)->default(0); // Comisión %
             $table->timestamps();
         });

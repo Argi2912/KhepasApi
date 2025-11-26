@@ -8,17 +8,17 @@ use Illuminate\Support\Facades\Hash;
 
 class SuperAdminSeeder extends Seeder
 {
-    /**
-     * Run the database seeds.
-     */
     public function run(): void
     {
-        $superAdmin = User::create([
-            'tenant_id' => null, // <-- Es Superadmin, no pertenece a ningún tenant
-            'name' => 'Super Admin',
-            'email' => 'super@admin.com',
-            'password' => Hash::make('password'), // Cambia esto
-        ]);
+        // Usuario Maestro (Sin Tenant ID)
+        $superAdmin = User::firstOrCreate(
+            ['email' => 'super@admin.com'],
+            [
+                'tenant_id' => null, 
+                'name' => 'Super Admin',
+                'password' => Hash::make('password'), 
+            ]
+        );
         
         $superAdmin->assignRole('superadmin');
     }

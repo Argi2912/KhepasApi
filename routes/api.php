@@ -94,6 +94,7 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::apiResource('transactions/requests', TransactionRequestController::class)
         ->only(['index', 'store', 'update'])
         ->middleware('permission:manage_transaction_requests');
+    Route::patch('/transactions/exchanges/{exchange}/deliver', [CurrencyExchangeController::class, 'markDelivered']);
 
     // 2. Transacciones Internas (Caja)
     Route::apiResource('transactions/internal', InternalTransactionController::class)

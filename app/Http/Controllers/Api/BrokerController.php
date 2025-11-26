@@ -3,67 +3,71 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Broker;
-use Illuminate\Http\Request; // Reemplaza con Form Requests
+use Illuminate\Http\Request;
 
 class BrokerController extends Controller
 {
-    public function index(Request $request) // 2. Inyectar Request
+    public function index(Request $request)
     {
-        // 3. Validar
+        // 1. Validar filtros (Ya no filtramos por user_id)
         $request->validate([
-            'user_id' => 'nullable|integer|exists:users,id',
+            'search' => 'nullable|string',
             'start_date' => 'nullable|date_format:Y-m-d',
             'end_date' => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
         ]);
 
-        // 4. Iniciar consulta
-        $query = Broker::query()->with('user:id,name');
+        // 2. Iniciar consulta (Ya no cargamos 'user')
+        $query = Broker::query();
 
-        // 5. Aplicar scopes
-        $query->when($request->user_id, function ($q, $id) {
-            return $q->userId($id); // Llama al scopeUserId()
+        // 3. Búsqueda por nombre o email
+        $query->when($request->search, function ($q, $search) {
+            $q->where('name', 'like', "%{$search}%")
+              ->orWhere('email', 'like', "%{$search}%");
         });
 
         $query->when($request->start_date, function ($q, $date) {
-            return $q->fromDate($date);
+            return $q->whereDate('created_at', '>=', $date);
         });
 
         $query->when($request->end_date, function ($q, $date) {
-            return $q->toDate($date);
+            return $q->whereDate('created_at', '<=', $date);
         });
 
-        // 6. Paginar
         return $query->latest()->paginate(15)->withQueryString();
     }
 
     public function store(Request $request)
     {
+        // 🚨 CAMBIO: Validamos datos directos, no user_id
         $validated = $request->validate([
-            // Asume que el 'user_id' ya existe y tiene rol 'corredor'
-            'user_id' => 'required|exists:users,id', 
+            'name' => 'required|string|max:255',
+            'email' => 'nullable|email|max:255',
+            'document_id' => 'nullable|string|max:50',
             'default_commission_rate' => 'nullable|numeric|min:0',
         ]);
         
         $broker = Broker::create($validated);
         
-        return response()->json($broker->load('user:id,name'), 201);
+        return response()->json($broker, 201);
     }
 
     public function show(Broker $broker)
     {
-        return $broker->load('user:id,name');
+        return $broker;
     }
 
     public function update(Request $request, Broker $broker)
     {
         $validated = $request->validate([
-            'user_id' => 'sometimes|required|exists:users,id',
+            'name' => 'sometimes|required|string|max:255',
+            'email' => 'nullable|email|max:255',
+            'document_id' => 'nullable|string|max:50',
             'default_commission_rate' => 'nullable|numeric|min:0',
         ]);
         
         $broker->update($validated);
         
-        return response()->json($broker->load('user:id,name'));
+        return response()->json($broker);
     }
 
     public function destroy(Broker $broker)

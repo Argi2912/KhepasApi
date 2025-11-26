@@ -62,11 +62,13 @@ class TransactionService
                 'amount_sent' => $amountSent,
                 'amount_received' => $amountReceived,
                 'exchange_rate' => $data['exchange_rate'],
+                'buy_rate'      => $data['buy_rate'] ?? null,
                 'commission_total_amount' => $data['commission_total_amount'] ?? 0,
                 'commission_provider_amount' => $data['commission_provider_amount'] ?? 0,
                 'commission_admin_amount' => $data['commission_admin_amount'] ?? 0,
                 'trader_info' => $data['trader_info'] ?? null,
                 'reference_id' => $data['reference_id'] ?? null,
+                'status' => $data['status'] ?? 'completed',
             ]);
 
             // D. Generar Asientos Contables (Ledger Entries)

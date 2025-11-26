@@ -34,6 +34,7 @@ class CurrencyExchange extends Model
         'amount_sent',      // Monto Salida
         'amount_received',  // Monto Entrada
         'exchange_rate',    // Tasa Manual
+        'buy_rate',
         
         // Comisiones (Montos exactos)
         'commission_total_amount',
@@ -50,6 +51,7 @@ class CurrencyExchange extends Model
         'amount_sent' => 'decimal:2',
         'amount_received' => 'decimal:2',
         'exchange_rate' => 'decimal:8', // Alta precisión para tasas
+        'buy_rate'      => 'decimal:8',
         'commission_total_amount' => 'decimal:2',
         'commission_provider_amount' => 'decimal:2',
         'commission_admin_amount' => 'decimal:2',

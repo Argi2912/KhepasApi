@@ -1,14 +1,14 @@
 <?php
-
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
 use App\Models\Traits\Filterable; // <-- 1. IMPORTAR
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Builder; // <-- 2. IMPORTAR
+// <-- 2. IMPORTAR
 
 class Broker extends Model
 {
@@ -19,7 +19,9 @@ class Broker extends Model
      */
     protected $fillable = [
         'tenant_id',
-        'user_id',
+        'name',
+        'email',
+        'document_id',
         'default_commission_rate',
     ];
 
