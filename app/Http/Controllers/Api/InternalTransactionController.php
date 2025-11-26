@@ -36,20 +36,24 @@ class InternalTransactionController extends Controller
         return $query->latest('transaction_date')->paginate(15);
     }
 
-    public function store(Request $request)
+   public function store(Request $request)
     {
         $validated = $request->validate([
-            'account_id'  => 'required|exists:accounts,id',
-            'user_id'     => 'required|exists:users,id', // Responsable
-            'type'        => 'required|in:income,expense',
-            'category'    => 'required|string|max:100', // Ej: "Sueldos"
-            'amount'      => 'required|numeric|min:0.01',
-            'description' => 'nullable|string|max:500',
+            'account_id'   => 'required|exists:accounts,id',
+            'user_id'      => 'required|exists:users,id',
+            'type'         => 'required|in:income,expense',
+            'category'     => 'required|string|max:100',
+            'amount'       => 'required|numeric|min:0.01',
+            'description'  => 'nullable|string|max:500',
             'transaction_date' => 'nullable|date',
+
+            // --- AGREGA ESTAS LÍNEAS ---
+            'dueño'       => 'nullable|string|max:255', // O 'required' si es obligatorio
+            'person_name' => 'nullable|string|max:255', // O 'required' si es obligatorio
         ]);
 
         try {
-            // Usamos el servicio para asegurar que el balance de la cuenta se actualice
+            // Ahora $validated ya incluye 'dueño' y 'person_name'
             $transaction = $this->transactionService->createInternalTransaction($validated);
             return response()->json($transaction, 201);
         } catch (\Exception $e) {

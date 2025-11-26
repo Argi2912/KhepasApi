@@ -35,6 +35,9 @@ class TransactionService
     {
         return DB::transaction(function () use ($data) {
             
+            // 1. Generamos el número ANTES para usarlo en la descripción del historial
+            $exchangeNumber = $this->generateSequentialNumber(CurrencyExchange::class, 'CE-');
+
             // A. Validar Saldos y Bloquear Cuentas
             $fromAccount = Account::lockForUpdate()->findOrFail($data['from_account_id']);
             $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
@@ -49,11 +52,41 @@ class TransactionService
             $fromAccount->decrement('balance', $amountSent);
             $toAccount->increment('balance', $amountReceived);
 
-            // C. Crear el registro principal
+            // 🔥 C. NUEVO: REGISTRO EN HISTORIAL DE CAJA 🔥
+            
+            // C.1. Registro de SALIDA (Gasto) en cuenta origen
+            InternalTransaction::create([
+                'tenant_id' => Auth::user()->tenant_id ?? 1,
+                'user_id' => $data['admin_user_id'],
+                'account_id' => $fromAccount->id,
+                'type' => 'expense',
+                'category' => 'Intercambio Enviado',
+                'amount' => $amountSent,
+                'description' => "Salida Intercambio {$exchangeNumber} hacia {$toAccount->name}",
+                'transaction_date' => now(),
+                'dueño' => $data['account_owner'] ?? null,
+                'person_name' => $data['person_name'] ?? null,
+            ]);
+
+            // C.2. Registro de ENTRADA (Ingreso) en cuenta destino
+            InternalTransaction::create([
+                'tenant_id' => Auth::user()->tenant_id ?? 1,
+                'user_id' => $data['admin_user_id'],
+                'account_id' => $toAccount->id,
+                'type' => 'income',
+                'category' => 'Intercambio Recibido',
+                'amount' => $amountReceived,
+                'description' => "Entrada Intercambio {$exchangeNumber} desde {$fromAccount->name}",
+                'transaction_date' => now(),
+                'dueño' => $data['account_owner'] ?? null,
+                'person_name' => $data['person_name'] ?? null,
+            ]);
+
+            // D. Crear el registro principal de Intercambio
             $exchange = CurrencyExchange::create([
                 'tenant_id' => Auth::user()->tenant_id,
-                'number' => $this->generateSequentialNumber(CurrencyExchange::class, 'CE-'),
-                'client_id' => $data['client_id'],
+                'number' => $exchangeNumber, // Usamos el número generado arriba
+                'client_id' => $data['client_id'] ?? null,
                 'broker_id' => $data['broker_id'] ?? null,
                 'provider_id' => $data['provider_id'] ?? null,
                 'admin_user_id' => $data['admin_user_id'],
@@ -71,18 +104,18 @@ class TransactionService
                 'status' => $data['status'] ?? 'completed',
             ]);
 
-            // D. Generar Asientos Contables (Ledger Entries)
+            // E. Generar Asientos Contables (Ledger Entries) - Lógica Original Intacta
 
-            // D.1. Comisión a Pagar al Broker (CxP)
+            // E.1. Comisión a Pagar al Broker (CxP)
             $brokerCommAmount = (float) ($data['commission_admin_amount'] ?? 0); 
-            $broker = $data['broker_id'] ? Broker::find($data['broker_id']) : null;
+            $broker = isset($data['broker_id']) ? Broker::find($data['broker_id']) : null;
             if ($brokerCommAmount > 0 && $broker) {
                 $exchange->ledgerEntries()->create([
                     'tenant_id' => $exchange->tenant_id,
                     'description' => "Comisión Corredor {$broker->user->name} (Op. #{$exchange->number})",
                     'amount' => $brokerCommAmount,
                     'type' => 'payable', 
-                    'status' => 'pending', // Siempre pendiente
+                    'status' => 'pending', 
                     'entity_id' => $broker->id,
                     'entity_type' => Broker::class,
                     'transaction_type' => CurrencyExchange::class,
@@ -90,38 +123,38 @@ class TransactionService
                 ]);
             }
 
-            // D.2. Comisión Ganada por la Empresa (CxC) - Lógica dinámica
+            // E.2. Comisión Ganada por la Empresa (CxC)
             $companyCommAmount = (float) ($data['commission_total_amount'] ?? 0);
-            $client = \App\Models\Client::find($exchange->client_id);
-            
-            if ($companyCommAmount > 0) {
-                // 🚨 Determina el estado: 'pending' si se difiere, 'paid' si se cobró.
+            if ($companyCommAmount > 0 && !empty($exchange->client_id)) {
+                $client = \App\Models\Client::find($exchange->client_id);
                 $isDeferred = $data['is_commission_deferred'] ?? false;
                 $status = $isDeferred ? 'pending' : 'paid';
 
-                $exchange->ledgerEntries()->create([
-                    'tenant_id' => $exchange->tenant_id,
-                    'description' => "Comisión de Casa - Sol. #{$exchange->number} (Cliente)",
-                    'amount' => $companyCommAmount,
-                    'type' => 'receivable', 
-                    'status' => $status, // 🚨 ESTADO DINÁMICO
-                    'entity_id' => $client->id,
-                    'entity_type' => \App\Models\Client::class, // El deudor es el cliente
-                    'transaction_type' => CurrencyExchange::class,
-                    'transaction_id' => $exchange->id,
-                ]);
+                if ($client) {
+                    $exchange->ledgerEntries()->create([
+                        'tenant_id' => $exchange->tenant_id,
+                        'description' => "Comisión de Casa - Sol. #{$exchange->number}",
+                        'amount' => $companyCommAmount,
+                        'type' => 'receivable', 
+                        'status' => $status,
+                        'entity_id' => $client->id,
+                        'entity_type' => \App\Models\Client::class,
+                        'transaction_type' => CurrencyExchange::class,
+                        'transaction_id' => $exchange->id,
+                    ]);
+                }
             }
             
-            // D.3. Comisión a Pagar al Proveedor (CxP)
+            // E.3. Comisión a Pagar al Proveedor (CxP)
             $providerCommAmount = (float) ($data['commission_provider_amount'] ?? 0); 
-            $provider = $data['provider_id'] ? Provider::find($data['provider_id']) : null;
+            $provider = isset($data['provider_id']) ? Provider::find($data['provider_id']) : null;
             if ($providerCommAmount > 0 && $provider) {
                 $exchange->ledgerEntries()->create([
                     'tenant_id' => $exchange->tenant_id,
                     'description' => "Comisión Proveedor {$provider->name} (Op. #{$exchange->number})",
                     'amount' => $providerCommAmount,
                     'type' => 'payable', 
-                    'status' => 'pending', // Siempre pendiente
+                    'status' => 'pending',
                     'entity_id' => $provider->id,
                     'entity_type' => Provider::class,
                     'transaction_type' => CurrencyExchange::class,
@@ -185,6 +218,8 @@ class TransactionService
                 'amount' => $entry->amount,
                 'description' => "{$descPrefix} #{$entry->id}: {$entry->description}",
                 'transaction_date' => now(),
+                'dueño'       => $data['dueño'] ?? null,
+                'person_name' => $data['person_name'] ?? null,
             ]);
 
             // 4. Marcar el Asiento como COMPLETADO ('paid')
@@ -220,6 +255,8 @@ class TransactionService
                 'amount' => $data['amount'],
                 'description' => $data['description'],
                 'transaction_date' => $data['transaction_date'] ?? now(),
+                'dueño'       => $data['dueño'] ?? null,
+                'person_name' => $data['person_name'] ?? null,
             ]);
         });
     }
