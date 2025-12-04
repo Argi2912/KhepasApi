@@ -9,16 +9,14 @@ use App\Models\InternalTransaction;
 use App\Models\LedgerEntry;
 use App\Models\Provider;
 use App\Models\Client;
-// Asegúrate de importar tu modelo de Plataforma si existe, ej: use App\Models\Platform;
+use App\Models\Investor; 
+use App\Models\Platform; 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Exception;
 
 class TransactionService
 {
-    /**
-     * Genera un número secuencial (Ej: CE-00001)
-     */
     private function generateSequentialNumber(string $modelClass, string $prefix): string
     {
         $latest = $modelClass::latest('id')->first();
@@ -27,127 +25,141 @@ class TransactionService
     }
 
     /**
-     * 1. Crea el Intercambio / Cambio de Divisa
-     * 2. Mueve saldos de cuentas (Dinero Real)
-     * 3. Genera DEUDAS AUTOMÁTICAS (Ledger) para Broker, Proveedor y Plataforma
+     * Crea Intercambio + Movimiento de Saldos + Asientos Contables (Incluyendo Inversionistas)
      */
     public function createCurrencyExchange(array $data)
     {
         return DB::transaction(function () use ($data) {
             
-            // 1. Generamos el número
+            // 1. Generamos el número secuencial
             $exchangeNumber = $this->generateSequentialNumber(CurrencyExchange::class, 'CE-');
+            $tenantId = Auth::user()->tenant_id ?? 1;
 
-            // A. Validar Saldos y Bloquear Cuentas
-            $fromAccount = Account::lockForUpdate()->findOrFail($data['from_account_id']);
-            $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
+            // Variables iniciales
+            $fromAccount = null;
+            $fromAccountId = null;
+            $capitalType = $data['capital_type'] ?? 'own';
             $amountSent = (float) $data['amount_sent'];
             $amountReceived = (float) $data['amount_received'];
-            
-            if ($fromAccount->balance < $amountSent) {
-                throw new Exception("Saldo insuficiente en {$fromAccount->name} para enviar {$amountSent} {$fromAccount->currency_code}.");
+
+            // -------------------------------------------------------------
+            // A. LÓGICA DE CUENTA ORIGEN (SOLO SI ES CAPITAL PROPIO)
+            // -------------------------------------------------------------
+            if ($capitalType === 'own') {
+                if (empty($data['from_account_id'])) {
+                    throw new Exception("Se requiere una cuenta de origen para capital propio.");
+                }
+
+                $fromAccount = Account::lockForUpdate()->findOrFail($data['from_account_id']);
+                
+                // Validar saldo
+                if ($fromAccount->balance < $amountSent) {
+                    throw new Exception("Saldo insuficiente en {$fromAccount->name} para enviar {$amountSent} {$fromAccount->currency_code}.");
+                }
+
+                // Descontar saldo
+                $fromAccount->decrement('balance', $amountSent);
+                $fromAccountId = $fromAccount->id;
+
+                // Registro Historial Caja (Salida)
+                InternalTransaction::create([
+                    'tenant_id' => $tenantId,
+                    'user_id' => $data['admin_user_id'],
+                    'account_id' => $fromAccount->id,
+                    'type' => 'expense',
+                    'category' => 'Intercambio Enviado',
+                    'amount' => $amountSent,
+                    'description' => "Salida Intercambio {$exchangeNumber}",
+                    'transaction_date' => now(),
+                ]);
             }
-            
-            // B. Mover Saldos (Dinero Real)
-            $fromAccount->decrement('balance', $amountSent);
+
+            // -------------------------------------------------------------
+            // B. LÓGICA DE CUENTA DESTINO (SIEMPRE ENTRA DINERO)
+            // -------------------------------------------------------------
+            $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
             $toAccount->increment('balance', $amountReceived);
 
-            // C. Registro en Historial de Caja (InternalTransaction)
-            
-            // C.1. Registro de SALIDA (Gasto) en cuenta origen
+            // Registro Historial Caja (Entrada)
             InternalTransaction::create([
-                'tenant_id' => Auth::user()->tenant_id ?? 1,
-                'user_id' => $data['admin_user_id'],
-                'account_id' => $fromAccount->id,
-                'type' => 'expense',
-                'category' => 'Intercambio Enviado',
-                'amount' => $amountSent,
-                'description' => "Salida Intercambio {$exchangeNumber} hacia {$toAccount->name}",
-                'transaction_date' => now(),
-                'dueño' => $data['account_owner'] ?? null,
-                'person_name' => $data['person_name'] ?? null,
-            ]);
-
-            // C.2. Registro de ENTRADA (Ingreso) en cuenta destino
-            InternalTransaction::create([
-                'tenant_id' => Auth::user()->tenant_id ?? 1,
+                'tenant_id' => $tenantId,
                 'user_id' => $data['admin_user_id'],
                 'account_id' => $toAccount->id,
                 'type' => 'income',
                 'category' => 'Intercambio Recibido',
                 'amount' => $amountReceived,
-                'description' => "Entrada Intercambio {$exchangeNumber} desde {$fromAccount->name}",
+                'description' => "Entrada Intercambio {$exchangeNumber}" . ($fromAccount ? " desde {$fromAccount->name}" : " (Inversionista)"),
                 'transaction_date' => now(),
-                'dueño' => $data['account_owner'] ?? null,
-                'person_name' => $data['person_name'] ?? null,
             ]);
 
-            // D. Crear el registro principal de Intercambio
+            // -------------------------------------------------------------
+            // C. CREAR EL MODELO PRINCIPAL
+            // -------------------------------------------------------------
+
             $exchange = CurrencyExchange::create([
-                'tenant_id' => Auth::user()->tenant_id ?? 1, // Fallback si null
+                'tenant_id' => $tenantId,
                 'number' => $exchangeNumber,
                 'client_id' => $data['client_id'] ?? null,
                 'broker_id' => $data['broker_id'] ?? null,
                 'provider_id' => $data['provider_id'] ?? null,
-                'platform_id' => $data['platform_id'] ?? null, // Guardamos la plataforma
+                'platform_id' => $data['platform_id'] ?? null,
                 'admin_user_id' => $data['admin_user_id'],
-                'from_account_id' => $fromAccount->id,
+                
+                'from_account_id' => $fromAccountId, // ID o NULL
                 'to_account_id' => $toAccount->id,
                 'amount_sent' => $amountSent,
                 'amount_received' => $amountReceived,
                 'exchange_rate' => $data['exchange_rate'],
                 'buy_rate'      => $data['buy_rate'] ?? null,
+                'received_rate' => $data['received_rate'] ?? null,
                 
-                // Montos de comisiones para referencia rápida
-                'commission_total_amount' => $data['commission_charged_amount'] ?? 0, // Ingreso Bruto
+                'commission_total_amount' => $data['commission_total_amount'] ?? 0,
                 'commission_provider_amount' => $data['commission_provider_amount'] ?? 0,
                 'commission_admin_amount' => $data['commission_admin_amount'] ?? 0,
-                'commission_broker_amount' => $data['commission_broker_amount'] ?? 0,
                 
-                'trader_info' => $data['trader_info'] ?? null,
+                // --- CAMPOS DE INVERSIONISTA ---
+                'capital_type' => $capitalType,
+                'investor_id'  => $data['investor_id'] ?? null,
+                'investor_profit_pct' => $data['investor_profit_pct'] ?? 0,
+                'investor_profit_amount' => $data['investor_profit_amount'] ?? 0,
+
                 'reference_id' => $data['reference_id'] ?? null,
                 'status' => $data['status'] ?? 'completed',
             ]);
 
             // =================================================================
-            // E. GENERAR ASIENTOS (CUENTAS POR PAGAR / COBRAR) - AUTOMATIZACIÓN
+            // D. GENERAR ASIENTOS (CUENTAS POR PAGAR)
             // =================================================================
 
-            // E.1. Comisión a Pagar al PROVEEDOR (CxP)
+            // D.1. Comisión PROVEEDOR (CxP)
             $providerCommAmount = (float) ($data['commission_provider_amount'] ?? 0); 
             $providerId = $data['provider_id'] ?? null;
-            
             if ($providerCommAmount > 0 && $providerId) {
-                $provider = Provider::find($providerId);
-                if ($provider) {
-                    $exchange->ledgerEntries()->create([
-                        'tenant_id' => $exchange->tenant_id,
-                        'description' => "Comisión Proveedor {$provider->name} (Op. #{$exchange->number})",
-                        'amount' => $providerCommAmount,
-                        'type' => 'payable', // Significa que debemos dinero
-                        'status' => 'pending',
-                        'entity_id' => $provider->id,
-                        'entity_type' => Provider::class,
-                        'transaction_type' => CurrencyExchange::class,
-                        'transaction_id' => $exchange->id,
-                    ]);
-                }
+                $exchange->ledgerEntries()->create([
+                    'tenant_id' => $exchange->tenant_id,
+                    'description' => "Comisión Proveedor (Op. #{$exchange->number})",
+                    'amount' => $providerCommAmount,
+                    'type' => 'payable',
+                    'status' => 'pending',
+                    'entity_id' => $providerId,
+                    'entity_type' => Provider::class,
+                    'transaction_type' => CurrencyExchange::class,
+                    'transaction_id' => $exchange->id,
+                ]);
             }
+            
 
-            // E.2. Comisión a Pagar al CORREDOR/BROKER (CxP)
-            // 🚨 CORREGIDO: Ahora usa commission_broker_amount correctamente
+            // D.2. Comisión CORREDOR/BROKER (CxP)
             $brokerCommAmount = (float) ($data['commission_broker_amount'] ?? 0); 
             $brokerId = $data['broker_id'] ?? null;
-            
             if ($brokerCommAmount > 0 && $brokerId) {
                 $broker = Broker::find($brokerId);
                 if ($broker) {
                     $exchange->ledgerEntries()->create([
                         'tenant_id' => $exchange->tenant_id,
-                        // Usamos $broker->name o $broker->user->name según tu modelo
                         'description' => "Comisión Corredor (Op. #{$exchange->number})", 
                         'amount' => $brokerCommAmount,
-                        'type' => 'payable', // Deuda
+                        'type' => 'payable',
                         'status' => 'pending', 
                         'entity_id' => $broker->id,
                         'entity_type' => Broker::class, 
@@ -157,34 +169,70 @@ class TransactionService
                 }
             }
 
-            // E.3. Costo de PLATAFORMA (CxP)
-            // 🚨 NUEVO BLOQUE: Registra la deuda a la plataforma
+            // D.3. Costo PLATAFORMA (CxP)
             $platformCommAmount = (float) ($data['commission_admin_amount'] ?? 0);
             $platformId = $data['platform_id'] ?? null;
-
             if ($platformCommAmount > 0 && $platformId) {
-                // Aquí asumimos que tienes un modelo Platform, o usas una entidad genérica
-                // Si 'platform_id' es una entidad real en BD:
                 $exchange->ledgerEntries()->create([
                     'tenant_id' => $exchange->tenant_id,
-                    'description' => "Costo Plataforma/Admin (Op. #{$exchange->number})",
+                    'description' => "Costo Plataforma (Op. #{$exchange->number})",
                     'amount' => $platformCommAmount,
-                    'type' => 'payable', // Deuda
+                    'type' => 'payable',
                     'status' => 'pending',
                     'entity_id' => $platformId,
-                    'entity_type' => 'App\Models\Platform', // Ajusta según tu modelo real
+                    'entity_type' => Platform::class, 
                     'transaction_type' => CurrencyExchange::class,
                     'transaction_id' => $exchange->id,
                 ]);
             }
 
-            // E.4. Comisión Ganada por la Empresa (CxC - Opcional)
-            // Registra el ingreso de la comisión cobrada al cliente
+            // =================================================================
+            // E. LÓGICA DE INVERSIONISTA (CxP CAPITAL + GANANCIA)
+            // =================================================================
+            if ($capitalType === 'investor' && !empty($data['investor_id'])) {
+                
+                $investorId = $data['investor_id'];
+                $rate = (float) ($data['exchange_rate'] ?? 1.0); // Tasa de la operación
+                
+                // Capital Principal (Monto enviado en moneda de origen)
+                $principal = (float) $data['amount_sent'];
+                
+                // Ganancia prometida al inversionista (Asumida en USD/Moneda de registro)
+                $profit = (float) ($data['investor_profit_amount'] ?? 0);
+                
+                // -----------------------------------------------------------
+                // 🚨 CÁLCULO DE CONVERSIÓN A USD (Moneda base del Ledger)
+                // -----------------------------------------------------------
+                $principalInUsd = $principal;
+                
+                // Si la tasa es válida y diferente de 1, se aplica la conversión
+                if ($rate > 0 && $rate != 1.0) {
+                    // El monto principal se divide por la tasa para obtener su valor en USD.
+                    $principalInUsd = $principal / $rate;
+                }
+                
+                // Deuda Total a registrar en USD: Principal (convertido) + Utilidad (asumida en USD)
+                $totalDebtInUsd = $principalInUsd + $profit;
+
+                // Crear Asiento CxP
+                $exchange->ledgerEntries()->create([
+                    'tenant_id' => $exchange->tenant_id,
+                    // Se añade [USD] a la descripción para indicar la moneda de registro
+                    'description' => "Devolución Capital + Utilidad (Op. #{$exchange->number}) [USD]", 
+                    'amount' => $totalDebtInUsd, 
+                    'type' => 'payable',          
+                    'status' => 'pending',
+                    'entity_id' => $investorId,
+                    'entity_type' => Investor::class, 
+                    'transaction_type' => CurrencyExchange::class,
+                    'transaction_id' => $exchange->id,
+                ]);
+            }
+
+            // D.4. Comisión Ganada (CxC - Opcional)
             $companyCommAmount = (float) ($data['commission_charged_amount'] ?? 0);
-            
             if ($companyCommAmount > 0 && !empty($exchange->client_id)) {
                 $client = Client::find($exchange->client_id);
-                // Si la comisión ya se cobró en el monto total, se marca 'paid', si es a crédito, 'pending'
                 $isDeferred = $data['is_commission_deferred'] ?? false;
                 $status = $isDeferred ? 'pending' : 'paid';
 
@@ -193,7 +241,7 @@ class TransactionService
                         'tenant_id' => $exchange->tenant_id,
                         'description' => "Comisión de Casa - Op. #{$exchange->number}",
                         'amount' => $companyCommAmount,
-                        'type' => 'receivable', // Dinero a favor
+                        'type' => 'receivable',
                         'status' => $status,
                         'entity_id' => $client->id,
                         'entity_type' => Client::class,
@@ -203,46 +251,37 @@ class TransactionService
                 }
             }
 
-            return $exchange->load('client', 'fromAccount', 'toAccount');
+            return $exchange->load('client', 'fromAccount', 'toAccount', 'investor');
         });
     }
-    
+
     /**
-     * Paga una deuda del Ledger creando una Transacción Interna.
+     * Pago de deudas (Sin cambios mayores, lógica genérica)
      */
     public function processDebtPayment(LedgerEntry $entry, int $accountId)
     {
         return DB::transaction(function () use ($entry, $accountId) {
-            // 1. Validaciones básicas
             if ($entry->status === 'paid') {
                 throw new Exception("Este asiento ya fue procesado anteriormente.");
             }
 
             $account = Account::lockForUpdate()->findOrFail($accountId);
 
-            // 2. LÓGICA BIFURCADA (PAYABLE vs RECEIVABLE)
             if ($entry->type === 'payable') {
-                // SALIDA DE DINERO (Pago de Deuda)
                 if ($account->balance < $entry->amount) {
                     throw new Exception("Saldo insuficiente en {$account->name} para pagar esta deuda.");
                 }
-                
                 $account->decrement('balance', $entry->amount);
-                
                 $txType = 'expense';
-                $category = 'Pago de Comisiones';
+                $category = 'Pago de Deuda';
                 $descPrefix = "Pago de deuda";
-
             } else {
-                // ENTRADA DE DINERO (Cobro de Crédito)
                 $account->increment('balance', $entry->amount);
-                
                 $txType = 'income';
                 $category = 'Cobro de Deuda';
                 $descPrefix = "Cobro de crédito";
             }
 
-            // 3. Crear registro en Caja (InternalTransaction)
             $internalTx = InternalTransaction::create([
                 'tenant_id' => $entry->tenant_id,
                 'user_id' => Auth::id(),
@@ -254,16 +293,12 @@ class TransactionService
                 'transaction_date' => now(),
             ]);
 
-            // 4. Marcar el Asiento como COMPLETADO ('paid')
             $entry->update(['status' => 'paid']);
 
             return $internalTx;
         });
     }
     
-    /**
-     * Crea transacciones manuales directas
-     */
     public function createInternalTransaction(array $data)
     {
          return DB::transaction(function () use ($data) {

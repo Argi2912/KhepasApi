@@ -1,6 +1,6 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\AccountController;
 
 /*
 |--------------------------------------------------------------------------
@@ -8,31 +8,31 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 // Autenticación y Globales
+use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\Superadmin\TenantController;
-use App\Http\Controllers\Api\Superadmin\TenantUserController as SuperadminTenantUserController;
+use App\Http\Controllers\Api\BrokerController;
 
 // Tableros y Reportes
-use App\Http\Controllers\Api\DashboardController;
-use App\Http\Controllers\Api\StatisticsController;
-use App\Http\Controllers\Api\AuditLogController;
+use App\Http\Controllers\Api\ClientController;
+use App\Http\Controllers\Api\CurrencyController;
+use App\Http\Controllers\Api\CurrencyExchangeController;
 
 // Catálogos (Bases de Datos)
-use App\Http\Controllers\Api\ClientController;
-use App\Http\Controllers\Api\ProviderController;
-use App\Http\Controllers\Api\BrokerController;
-use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\ExchangeRateController;
+use App\Http\Controllers\Api\InternalTransactionController;
+use App\Http\Controllers\Api\InvestorController;
+use App\Http\Controllers\Api\LedgerEntryController;
 use App\Http\Controllers\Api\PlatformController;
-use App\Http\Controllers\Api\CurrencyController;
-use App\Http\Controllers\Api\TenantUserController;
+use App\Http\Controllers\Api\ProviderController;
 
 // Operaciones Financieras (El Núcleo)
-use App\Http\Controllers\Api\TransactionRequestController;
-use App\Http\Controllers\Api\InternalTransactionController;
-use App\Http\Controllers\Api\CurrencyExchangeController;
-use App\Http\Controllers\Api\ExchangeRateController;
-use App\Http\Controllers\Api\LedgerEntryController;
+use App\Http\Controllers\Api\StatisticsController;
 use App\Http\Controllers\Api\Superadmin\ActivityLogController;
+use App\Http\Controllers\Api\Superadmin\TenantController;
+use App\Http\Controllers\Api\TenantUserController;
+use App\Http\Controllers\Api\TransactionRequestController;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
@@ -70,25 +70,38 @@ Route::group(['middleware' => ['auth:api']], function () {
     // --- B. Dashboard y Métricas ---
     Route::get('dashboard/summary', [DashboardController::class, 'getSummary'])
         ->middleware('permission:view_dashboard');
-    
+
     Route::get('statistics/performance', [StatisticsController::class, 'getPerformance'])
+        ->middleware('permission:view_statistics');
+
+    Route::get('statistics/providers', [StatisticsController::class, 'getProviderReport'])
+        ->middleware('permission:view_statistics');
+
+// Opcional: Agrega las rutas para el resto de los reportes para ser consistentes
+    Route::get('statistics/clients', [StatisticsController::class, 'getClientReport'])
+        ->middleware('permission:view_statistics');
+
+    Route::get('statistics/platforms', [StatisticsController::class, 'getPlatformReport'])
+        ->middleware('permission:view_statistics');
+
+    Route::get('statistics/brokers', [StatisticsController::class, 'getBrokerReport'])
         ->middleware('permission:view_statistics');
 
     // --- C. Catálogos y Recursos ---
     Route::apiResource('clients', ClientController::class)
         ->middleware('permission:manage_clients');
-        
+
     Route::apiResource('providers', ProviderController::class)
-        ->middleware('permission:manage_clients'); 
-        
+        ->middleware('permission:manage_clients');
+
     Route::apiResource('brokers', BrokerController::class)
         ->middleware('permission:manage_users');
-        
+
     Route::apiResource('accounts', AccountController::class)
         ->middleware('permission:manage_exchanges');
-        
+
     Route::apiResource('platforms', PlatformController::class)
-        ->middleware('permission:manage_platforms'); 
+        ->middleware('permission:manage_platforms');
 
     Route::apiResource('currencies', CurrencyController::class)
         ->middleware('permission:manage_exchanges');
@@ -112,24 +125,24 @@ Route::group(['middleware' => ['auth:api']], function () {
         ->middleware('permission:manage_exchanges');
 
     // --- E. Lógica de Negocio (Tasas) ---
-    
+
     // Ruta ligera para obtener todas las tasas en el Frontend (Store)
     Route::get('rates/all', [ExchangeRateController::class, 'all'])
-         ->middleware('permission:manage_exchanges');
+        ->middleware('permission:manage_exchanges');
 
     // CRUD de Tasas (Configuración)
     Route::apiResource('rates', ExchangeRateController::class)
-         ->only(['index', 'show', 'store', 'update']) 
-         ->middleware('permission:manage_exchanges');
+        ->only(['index', 'show', 'store', 'update'])
+        ->middleware('permission:manage_exchanges');
 
     // --- F. Contabilidad y Auditoría (CORREGIDO Y ORDENADO) ---
-    
+
     // 1. Resumen de Cuentas (Tarjetas Rojas/Verdes) - IMPORTANTE: Debe ir antes del resource
     Route::get('ledger/summary', [LedgerEntryController::class, 'summary']);
 
     // 2. Pagar Deuda
     Route::post('ledger/{ledger_entry}/pay', [LedgerEntryController::class, 'pay']);
-    
+
     // 3. Listado General
     Route::apiResource('ledger', LedgerEntryController::class)
         ->only(['index', 'show', 'update']);
@@ -138,10 +151,12 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::get('audit-logs', [AuditLogController::class, 'index'])
         ->middleware('permission:view_database_history');
 
+    Route::apiResource('investors', InvestorController::class);
+
     // --- G. Gestión de Usuarios ---
     Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])
         ->middleware('permission:manage_users');
-        
+
     Route::apiResource('users', TenantUserController::class)
         ->middleware('permission:manage_users');
 });
