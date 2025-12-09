@@ -77,6 +77,8 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::get('statistics/providers', [StatisticsController::class, 'getProviderReport'])
         ->middleware('permission:view_statistics');
 
+    Route::get('/reports/profit-matrix', [App\Http\Controllers\Api\ReportController::class, 'profitMatrix']);
+
 // Opcional: Agrega las rutas para el resto de los reportes para ser consistentes
     Route::get('statistics/clients', [StatisticsController::class, 'getClientReport'])
         ->middleware('permission:view_statistics');
@@ -159,4 +161,5 @@ Route::group(['middleware' => ['auth:api']], function () {
 
     Route::apiResource('users', TenantUserController::class)
         ->middleware('permission:manage_users');
+
 });
