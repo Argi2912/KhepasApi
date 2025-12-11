@@ -1,13 +1,14 @@
 <?php
-
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
 use App\Models\Traits\Filterable; // <-- 1. IMPORTAR
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-use Illuminate\Database\Eloquent\Builder; // <-- 2. IMPORTAR
+
+// <-- 2. IMPORTAR
 
 class LedgerEntry extends Model
 {
@@ -20,8 +21,8 @@ class LedgerEntry extends Model
         'tenant_id',
         'description',
         'amount',
-        'type', // 'payable' o 'receivable'
-        'status', // 'pending' o 'paid'
+        'type',        // 'payable' o 'receivable'
+        'status',      // 'pending' o 'paid'
         'entity_type', // A quién: Provider, Broker, Client
         'entity_id',
         'transaction_type', // Qué lo originó: DollarPurchase, CurrencyExchange
@@ -33,9 +34,14 @@ class LedgerEntry extends Model
      * @var array<string, string>
      */
     protected $casts = [
-        'amount' => 'decimal:2',
+        'amount'   => 'decimal:2',
         'due_date' => 'date',
     ];
+
+    public function payments()
+    {
+        return $this->hasMany(LedgerPayment::class);
+    }
 
     /**
      * La entidad relacionada (el Proveedor, Corredor, etc. a quien se le debe)
@@ -53,6 +59,24 @@ class LedgerEntry extends Model
     public function transaction(): MorphTo
     {
         return $this->morphTo();
+    }
+
+    // Accessor para monto pendiente (calculado)
+    public function getPendingAmountAttribute()
+    {
+        return $this->original_amount - $this->paid_amount;
+    }
+
+// Actualizar status automáticamente
+    public function getStatusAttribute($value)
+    {
+        if ($this->paid_amount >= $this->original_amount) {
+            return 'paid';
+        }
+        if ($this->paid_amount > 0) {
+            return 'partially_paid';
+        }
+        return 'pending';
     }
 
     /**
@@ -81,6 +105,16 @@ class LedgerEntry extends Model
     public function scopeEntity(Builder $query, $entityType, $entityId): Builder
     {
         return $query->where('entity_type', $entityType)
-                     ->where('entity_id', $entityId);
+            ->where('entity_id', $entityId);
+    }
+
+    protected static function booted()
+    {
+        static::creating(function ($entry) {
+            if (is_null($entry->original_amount)) {
+                $entry->original_amount = $entry->amount;
+            }
+            $entry->pending_amount = $entry->original_amount;
+        });
     }
 }

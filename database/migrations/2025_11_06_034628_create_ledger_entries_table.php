@@ -6,35 +6,38 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        Schema::create('ledger_entries', function (Blueprint $table) {
+        Schema::create('ledger_payments', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('tenant_id')->constrained('tenants')->onDelete('cascade');
-            $table->string('description');                                   // Ej: "Comisión Corredor (Simon Eloy) - Sol. #1234"
-            $table->decimal('amount', 14, 2);                                // Monto
-            $table->enum('type', ['payable', 'receivable']);                 // Por Pagar / Por Cobrar
-            $table->enum('status', ['pending', 'paid'])->default('pending'); // Pendiente / Pagada
-
-            // A quién se le debe o de quién se cobra (Proveedor, Corredor, Cliente)
-            $table->morphs('entity');
-
-            // Transacción que originó esta entrada (Opcional)
-            $table->nullableMorphs('transaction');
-
-            $table->date('due_date')->nullable(); // Fecha de vencimiento
+            $table->foreignId('ledger_entry_id')->constrained('ledger_entries')->onDelete('cascade');
+            $table->foreignId('account_id')->constrained('accounts');
+            $table->foreignId('user_id')->constrained('users');
+            $table->decimal('amount', 14, 2);
+            $table->timestamp('payment_date')->useCurrent();
+            $table->text('description')->nullable();
             $table->timestamps();
+
+            $table->index(['ledger_entry_id', 'payment_date']);
+        });
+
+        // Agregar campo de monto pagado y monto original en ledger_entries
+        Schema::table('ledger_entries', function (Blueprint $table) {
+            $table->decimal('original_amount', 14, 2)->after('amount'); // Monto original
+            $table->decimal('paid_amount', 14, 2)->default(0)->after('original_amount'); // Total abonado
+            $table->decimal('pending_amount', 14, 2)->after('paid_amount'); // Calculado
+            $table->enum('status', ['pending', 'partially_paid', 'paid'])->default('pending')->change();
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::dropIfExists('ledger_entries');
+        Schema::dropIfExists('ledger_payments');
+
+        Schema::table('ledger_entries', function (Blueprint $table) {
+            $table->dropColumn(['original_amount', 'paid_amount', 'pending_amount']);
+            // Volver a status original
+            $table->enum('status', ['pending', 'paid'])->default('pending');
+        });
     }
 };

@@ -147,7 +147,7 @@ Route::group(['middleware' => ['auth:api']], function () {
 
     // 3. Listado General
     Route::apiResource('ledger', LedgerEntryController::class)
-        ->only(['index', 'show', 'update']);
+        ->only(['index', 'store', 'update']);
 
     // 4. Historial
     Route::get('audit-logs', [AuditLogController::class, 'index'])
