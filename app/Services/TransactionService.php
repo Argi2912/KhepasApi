@@ -185,46 +185,14 @@ class TransactionService
             }
 
             // =================================================================
-            // E. LÓGICA DE INVERSIONISTA (CxP CAPITAL + GANANCIA)
+            // E. LÓGICA DE INVERSIONISTA (Solo Informativo)
             // =================================================================
+            // MODIFICACIÓN: No generamos asientos contables ni alteramos saldo.
+            // La rentabilidad se calcula por fecha (Interés Compuesto) y no por operación.
+            // La relación ya quedó guardada en el modelo CurrencyExchange (investor_id) en el paso C.
             if ($capitalType === 'investor' && ! empty($data['investor_id'])) {
-
-                $investorId = $data['investor_id'];
-                $rate       = (float) ($data['exchange_rate'] ?? 1.0); // Tasa de la operación
-
-                // Capital Principal (Monto enviado en moneda de origen)
-                $principal = (float) $data['amount_sent'];
-
-                // Ganancia prometida al inversionista (Asumida en USD/Moneda de registro)
-                $profit = (float) ($data['investor_profit_amount'] ?? 0);
-
-                // -----------------------------------------------------------
-                // 🚨 CÁLCULO DE CONVERSIÓN A USD (Moneda base del Ledger)
-                // -----------------------------------------------------------
-                $principalInUsd = $principal;
-
-                // Si la tasa es válida y diferente de 1, se aplica la conversión
-                if ($rate > 0 && $rate != 1.0) {
-                    // El monto principal se divide por la tasa para obtener su valor en USD.
-                    $principalInUsd = $principal / $rate;
-                }
-
-                // Deuda Total a registrar en USD: Principal (convertido) + Utilidad (asumida en USD)
-                $totalDebtInUsd = $principalInUsd + $profit;
-
-                // Crear Asiento CxP
-                $exchange->ledgerEntries()->create([
-                    'tenant_id'   => $exchange->tenant_id,
-                    // Se añade [USD] a la descripción para indicar la moneda de registro
-                    'description' => "Devolución Capital + Utilidad (Op. #{$exchange->number}) [USD]",
-                    'amount'           => $totalDebtInUsd,
-                    'type'             => 'payable',
-                    'status'           => 'pending',
-                    'entity_id'        => $investorId,
-                    'entity_type'      => Investor::class,
-                    'transaction_type' => CurrencyExchange::class,
-                    'transaction_id'   => $exchange->id,
-                ]);
+                // Aquí podrías validar si el inversionista existe o está activo si lo deseas,
+                // pero no creamos ledgerEntries para no duplicar deuda.
             }
 
             // D.4. Comisión Ganada (CxC - Opcional)
@@ -369,6 +337,32 @@ class TransactionService
             $entry->increment('paid_amount', $amount);
 
             return $internalTx;
+        });
+    }
+
+    /**
+     * Agrega saldo a favor (Fondeo / Recarga Manual) a un Proveedor o Inversionista.
+     * Crea un registro 'payable' en el Ledger (La empresa le debe dinero al usuario).
+     * * @param mixed $entity Instancia de Provider o Investor
+     * @param float $amount Monto a agregar
+     * @param string|null $description Descripción del movimiento
+     */
+    public function addBalanceToEntity($entity, float $amount, ?string $description = 'Recarga de saldo')
+    {
+        return DB::transaction(function () use ($entity, $amount, $description) {
+            
+            return $entity->ledgerEntries()->create([
+                'tenant_id'        => Auth::user()->tenant_id ?? 1,
+                'description'      => $description,
+                'amount'           => $amount,
+                'original_amount'  => $amount,
+                'paid_amount'      => 0,
+                'type'             => 'payable', // Payable = Saldo a favor (Deuda de la empresa hacia la entidad)
+                'status'           => 'pending',
+                'due_date'         => now(),
+                'transaction_type' => get_class($entity),
+                'transaction_id'   => $entity->id,
+            ]);
         });
     }
 }

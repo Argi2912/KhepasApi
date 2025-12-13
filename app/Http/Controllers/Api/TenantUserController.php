@@ -61,7 +61,6 @@ class TenantUserController extends Controller
 
         return UserResource::collection($users);
     }
-
     /**
      * Almacena un nuevo usuario (Corredor, Admin) PARA EL TENANT ACTUAL.
      */

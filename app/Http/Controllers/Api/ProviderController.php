@@ -3,11 +3,20 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Provider;
-use Illuminate\Http\Request; // Reemplaza con Form Requests
+use App\Services\TransactionService; // <--- 1. IMPORTAR SERVICIO
+use Illuminate\Http\Request;
 
 class ProviderController extends Controller
 {
-    public function index(Request $request) // 2. Inyectar Request
+    protected $transactionService; // <--- 2. PROPIEDAD
+
+    // 3. CONSTRUCTOR PARA INYECTAR EL SERVICIO
+    public function __construct(TransactionService $transactionService)
+    {
+        $this->transactionService = $transactionService;
+    }
+
+    public function index(Request $request)
     {
         // 3. Validar
         $request->validate([
@@ -21,7 +30,7 @@ class ProviderController extends Controller
 
         // 5. Aplicar scopes
         $query->when($request->search, function ($q, $term) {
-            return $q->search($term); // Llama al scopeSearch()
+            return $q->search($term);
         });
 
         $query->when($request->start_date, function ($q, $date) {
@@ -32,8 +41,16 @@ class ProviderController extends Controller
             return $q->toDate($date);
         });
 
-        // 6. Paginar
-        return $query->latest()->paginate(15)->withQueryString();
+        // 6. Paginar y Adjuntar Saldo (CAMBIO AQUÍ)
+        $providers = $query->latest()->paginate(15)->withQueryString();
+
+        // Recorremos los resultados para agregar el saldo "al vuelo"
+        $providers->getCollection()->transform(function ($provider) {
+            $provider->current_balance = $provider->available_balance;
+            return $provider;
+        });
+
+        return $providers;
     }
 
     public function store(Request $request)
@@ -52,6 +69,9 @@ class ProviderController extends Controller
 
     public function show(Provider $provider)
     {
+        // Adjuntar saldo antes de devolver (CAMBIO AQUÍ)
+        $provider->current_balance = $provider->available_balance;
+        
         return $provider;
     }
 
@@ -73,5 +93,27 @@ class ProviderController extends Controller
     {
         $provider->delete();
         return response()->noContent();
+    }
+
+    /**
+     * NUEVO METODO: Agregar saldo manualmente
+     */
+    public function addBalance(Request $request, Provider $provider)
+    {
+        $request->validate([
+            'amount' => 'required|numeric|min:0.01',
+            'description' => 'nullable|string|max:255'
+        ]);
+
+        $this->transactionService->addBalanceToEntity(
+            $provider, 
+            $request->amount, 
+            $request->description ?? 'Carga de saldo manual'
+        );
+
+        return response()->json([
+            'message' => 'Saldo agregado correctamente',
+            'new_balance' => $provider->available_balance
+        ]);
     }
 }

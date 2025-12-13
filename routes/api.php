@@ -93,6 +93,10 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::apiResource('clients', ClientController::class)
         ->middleware('permission:manage_clients');
 
+    // [NUEVO] Ruta para agregar saldo a Proveedor (Antes del resource)
+    Route::post('providers/{provider}/balance', [ProviderController::class, 'addBalance'])
+        ->middleware('permission:manage_clients');
+
     Route::apiResource('providers', ProviderController::class)
         ->middleware('permission:manage_clients');
 
@@ -152,6 +156,9 @@ Route::group(['middleware' => ['auth:api']], function () {
     // 4. Historial
     Route::get('audit-logs', [AuditLogController::class, 'index'])
         ->middleware('permission:view_database_history');
+
+    // [NUEVO] Ruta para agregar saldo a Inversionista (Antes del resource)
+    Route::post('investors/{investor}/balance', [InvestorController::class, 'addBalance']);
 
     Route::apiResource('investors', InvestorController::class);
 

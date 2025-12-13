@@ -4,24 +4,46 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use App\Models\Traits\BelongsToTenant; // Si usas el trait de tenant
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use App\Models\Traits\BelongsToTenant;
 
 class Investor extends Model
 {
     use HasFactory, BelongsToTenant; 
-    // use BelongsToTenant; // Descomenta si usas tenancy
 
-    protected $fillable = ['tenant_id', 'name', 'alias', 'email', 'phone', 'is_active'];
+    // AQUÍ ESTABA EL DETALLE: Agregamos los nuevos campos permitidos
+    protected $fillable = [
+        'tenant_id', 
+        'name', 
+        'alias', 
+        'email', 
+        'phone', 
+        'is_active',
+        'interest_rate',      // <--- Nuevo
+        'payout_day',         // <--- Nuevo
+        'last_interest_date'  // <--- Nuevo
+    ];
 
-    // Relación: Un inversionista tiene muchas operaciones financiadas
+    // Relación con operaciones de cambio
     public function exchanges()
     {
         return $this->hasMany(CurrencyExchange::class);
     }
 
-    // Relación POLIMÓRFICA: Para ver el historial de deudas/pagos en el Ledger
-    public function ledgerEntries()
+    // Relación con la Contabilidad (Ledger)
+    public function ledgerEntries(): MorphMany
     {
         return $this->morphMany(LedgerEntry::class, 'entity');
+    }
+
+    // CÁLCULO DE SALDO REAL (Original - Pagado)
+    public function getAvailableBalanceAttribute()
+    {
+        return $this->ledgerEntries()
+            ->where('type', 'payable')
+            ->get()
+            ->sum(function ($entry) {
+                return $entry->original_amount - $entry->paid_amount;
+            });
     }
 }
