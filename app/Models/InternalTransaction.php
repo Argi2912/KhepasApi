@@ -28,6 +28,7 @@ class InternalTransaction extends Model
         'transaction_date',
         'dueño',        // Nuevo campo para el dueño
         'person_name',  // Nuevo campo para el nombre de la persona
+        'currency_code',
     ];
 
     protected $casts = [
@@ -54,7 +55,7 @@ class InternalTransaction extends Model
     }
 
     // --- Auditoría ---
-    
+
     public function getActivitylogOptions(): LogOptions
     {
         return LogOptions::defaults()

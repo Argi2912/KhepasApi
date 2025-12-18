@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
@@ -25,11 +26,11 @@ class CurrencyExchange extends Model
         'provider_id',   // Opcional
         'platform_id',   // Plataforma usada (Ej: Binance, Coinbase, etc.)
 
-                           // Flujo de Dinero
+        // Flujo de Dinero
         'from_account_id', // Cuenta que envía (Sale dinero)
         'to_account_id',   // Cuenta que recibe (Entra dinero)
 
-                           // Datos Financieros (Manuales)
+        // Datos Financieros (Manuales)
         'amount_sent',     // Monto Salida
         'amount_received', // Monto Entrada
         'exchange_rate',   // Tasa Manual
@@ -41,7 +42,7 @@ class CurrencyExchange extends Model
         'commission_admin_amount',
         'commission_broker_amount',
 
-                        // Trazabilidad
+        // Trazabilidad
         'trader_info',  // Ej: Pepito27 - Binance
         'reference_id', // Hash o ID externo
         'status',
@@ -50,6 +51,9 @@ class CurrencyExchange extends Model
         'investor_id',
         'investor_profit_pct',
         'investor_profit_amount',
+
+        'currency_sent',
+        'currency_received',
     ];
 
     protected $casts = [

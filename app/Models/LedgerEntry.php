@@ -1,8 +1,10 @@
 <?php
+
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
 use App\Models\Traits\Filterable; // <-- 1. IMPORTAR
+use Exception;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -21,6 +23,7 @@ class LedgerEntry extends Model
         'tenant_id',
         'description',
         'amount',
+        'currency_type',
         'type',        // 'payable' o 'receivable'
         'status',      // 'pending' o 'paid'
         'entity_type', // A quién: Provider, Broker, Client
@@ -67,7 +70,7 @@ class LedgerEntry extends Model
         return $this->original_amount - $this->paid_amount;
     }
 
-// Actualizar status automáticamente
+    // Actualizar status automáticamente
     public function getStatusAttribute($value)
     {
         if ($this->paid_amount >= $this->original_amount) {
@@ -110,11 +113,33 @@ class LedgerEntry extends Model
 
     protected static function booted()
     {
-        static::creating(function ($entry) {
-            if (is_null($entry->original_amount)) {
-                $entry->original_amount = $entry->amount;
+        static::creating(function ($payment) {
+            // Cargar el asiento relacionado
+            $entry = $payment->ledgerEntry;
+
+            if ($entry && $entry->currency_type !== $payment->currency_type) {
+                throw new Exception(
+                    "El pago debe ser en la misma moneda que el asiento contable. " .
+                        "Asiento: {$entry->currency_type}, Pago: {$payment->currency_type}"
+                );
             }
-            $entry->pending_amount = $entry->original_amount;
+
+            // Opcional: también validar que la cuenta usada tenga la misma moneda
+            if ($payment->account && $payment->account->currency_code !== $payment->currency_type) {
+                throw new Exception(
+                    "La cuenta seleccionada ({$payment->account->name}) opera en {$payment->account->currency_code}, " .
+                        "pero el pago está en {$payment->currency_type}"
+                );
+            }
+        });
+
+        // También validar al actualizar (por si alguien edita manualmente)
+        static::updating(function ($payment) {
+            $entry = $payment->ledgerEntry()->withTrashed()->first(); // por si está soft deleted
+
+            if ($entry && $entry->currency_type !== $payment->currency_type) {
+                throw new Exception("No se puede cambiar la moneda del pago a una diferente del asiento original.");
+            }
         });
     }
 }
