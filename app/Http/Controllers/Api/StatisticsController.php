@@ -257,4 +257,50 @@ class StatisticsController extends Controller
     {
         return response()->json($this->getEntityReport('broker', $request));
     }
+    public function getInvestorReport(\Illuminate\Http\Request $request)
+{
+    // 1. Cargamos el Inversionista con su Cuenta (Saldo actual) y sus Entradas (Historial)
+    $investors = \App\Models\Investor::with(['account', 'ledgerEntries' => function ($q) {
+        $q->where('type', 'payable');
+    }])->get();
+
+    $now = \Carbon\Carbon::now();
+
+    // 2. Preparamos los datos EXACTOS para EntityReport
+    $data = $investors->map(function ($investor) use ($now) {
+        
+        // --- LÓGICA DE RECUPERACIÓN DE DINERO ---
+        // Opción A: Saldo en la tabla 'accounts' (Lo más preciso)
+        $capital = $investor->account ? $investor->account->balance : 0;
+
+        // Opción B: Si es 0, sumamos todo lo que ha entrado al Ledger (Respaldo)
+        if ($capital == 0) {
+            $capital = $investor->ledgerEntries->sum('original_amount');
+        }
+
+        // Cálculo de Interés
+        $start = \Carbon\Carbon::parse($investor->created_at);
+        $months = $start->diffInMonths($now);
+        $rate = $investor->interest_rate / 100;
+        $totalDebt = $capital * pow((1 + $rate), $months);
+
+        return [
+            // Identificadores (Ocultos o para acciones)
+            'entity_id'   => $investor->id,
+            'entity_name' => $investor->name, // La columna principal
+
+            // --- COLUMNAS VISIBLES (Las llaves definen el Título en la Tabla) ---
+            // Usamos nombres claros para que EntityReport los muestre bien
+            'capital_invested' => round($capital, 2),        // Capital Invertido
+            'monthly_rate'     => $investor->interest_rate . '%', // Tasa Mensual
+            'payout_day'       => 'Día ' . $investor->payout_day, // Día de Corte
+            'total_accumulated'=> round($totalDebt, 2),      // Total Acumulado
+        ];
+    });
+
+    // Retornamos en el formato que EntityReport espera (dentro de 'reports')
+    return response()->json([
+        'reports' => $data
+    ]);
+}
 }

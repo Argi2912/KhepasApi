@@ -89,6 +89,9 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::get('statistics/brokers', [StatisticsController::class, 'getBrokerReport'])
         ->middleware('permission:view_statistics');
 
+    Route::get('statistics/investors', [StatisticsController::class, 'getInvestorReport'])
+    ->middleware('permission:view_statistics');
+
     // --- C. Catálogos y Recursos ---
     Route::apiResource('clients', ClientController::class)
         ->middleware('permission:manage_clients');

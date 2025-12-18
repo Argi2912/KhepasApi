@@ -8,6 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // 1. Crear tabla de pagos (esto lo dejamos igual)
         Schema::create('ledger_payments', function (Blueprint $table) {
             $table->id();
             $table->foreignId('ledger_entry_id')->constrained('ledger_entries')->onDelete('cascade');
@@ -21,11 +22,18 @@ return new class extends Migration
             $table->index(['ledger_entry_id', 'payment_date']);
         });
 
-        // Agregar campo de monto pagado y monto original en ledger_entries
+        // 2. Modificar ledger_entries (AQUÍ ESTÁ EL CAMBIO)
         Schema::table('ledger_entries', function (Blueprint $table) {
-            $table->decimal('original_amount', 14, 2)->after('amount'); // Monto original
-            $table->decimal('paid_amount', 14, 2)->default(0)->after('original_amount'); // Total abonado
-            $table->decimal('pending_amount', 14, 2)->after('paid_amount'); // Calculado
+            // Campos de montos
+            $table->decimal('original_amount', 14, 2)->after('amount'); 
+            
+            // ---> NUEVA COLUMNA DE MONEDA <---
+            $table->string('currency_code', 3)->default('USD')->after('amount'); 
+
+            $table->decimal('paid_amount', 14, 2)->default(0)->after('original_amount'); 
+            $table->decimal('pending_amount', 14, 2)->after('paid_amount'); 
+            
+            // Actualizar status
             $table->enum('status', ['pending', 'partially_paid', 'paid'])->default('pending')->change();
         });
     }
@@ -35,7 +43,7 @@ return new class extends Migration
         Schema::dropIfExists('ledger_payments');
 
         Schema::table('ledger_entries', function (Blueprint $table) {
-            $table->dropColumn(['original_amount', 'paid_amount', 'pending_amount']);
+            $table->dropColumn(['original_amount', 'currency_code', 'paid_amount', 'pending_amount']);
             // Volver a status original
             $table->enum('status', ['pending', 'paid'])->default('pending');
         });
