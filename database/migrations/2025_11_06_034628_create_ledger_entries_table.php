@@ -8,8 +8,8 @@ return new class extends Migration
 {
     public function up(): void
     {
-
-        Schema::table('ledger_entries', function (Blueprint $table) {
+        // 1. CORRECCIÓN PRINCIPAL: Usar 'create' en lugar de 'table'
+        Schema::create('ledger_entries', function (Blueprint $table) {
             $table->id();
 
             // Relación con Tenant
@@ -31,19 +31,18 @@ return new class extends Migration
             $table->enum('status', ['pending', 'partially_paid', 'paid'])->default('pending');
 
             // Relación Polimórfica: A QUIÉN (Provider, Broker, Client)
-            // Esto crea 'entity_type' y 'entity_id'
             $table->string('entity_type');
             $table->unsignedBigInteger('entity_id');
             $table->index(['entity_type', 'entity_id']);
 
             // Relación Polimórfica: ORIGEN (CurrencyExchange, DollarPurchase)
-            // Esto crea 'transaction_type' y 'transaction_id' (Nullables)
             $table->nullableMorphs('transaction');
 
             $table->date('due_date')->nullable();
             $table->timestamps();
         });
 
+        // Creación de la tabla de pagos (esto ya estaba bien, usa 'create')
         Schema::create('ledger_payments', function (Blueprint $table) {
             $table->id();
             $table->foreignId('ledger_entry_id')->constrained('ledger_entries')->onDelete('cascade');
@@ -56,19 +55,12 @@ return new class extends Migration
 
             $table->index(['ledger_entry_id', 'payment_date']);
         });
-
-        // Agregar campo de monto pagado y monto original en ledger_entries
-
     }
 
     public function down(): void
     {
+        // 2. CORRECCIÓN EN DOWN: Borrar las tablas completas
         Schema::dropIfExists('ledger_payments');
-
-        Schema::table('ledger_entries', function (Blueprint $table) {
-            $table->dropColumn(['original_amount', 'paid_amount', 'pending_amount']);
-            // Volver a status original
-            $table->enum('status', ['pending', 'paid'])->default('pending');
-        });
+        Schema::dropIfExists('ledger_entries');
     }
 };
