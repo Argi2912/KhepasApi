@@ -8,6 +8,14 @@ return new class extends Migration
 {
     public function up(): void
     {
+
+        Schema::table('ledger_entries', function (Blueprint $table) {
+            $table->decimal('original_amount', 14, 2)->after('amount'); // Monto original
+            $table->decimal('paid_amount', 14, 2)->default(0)->after('original_amount'); // Total abonado
+            $table->decimal('pending_amount', 14, 2)->after('paid_amount'); // Calculado
+            $table->enum('status', ['pending', 'partially_paid', 'paid'])->default('pending')->change();
+        });
+
         Schema::create('ledger_payments', function (Blueprint $table) {
             $table->id();
             $table->foreignId('ledger_entry_id')->constrained('ledger_entries')->onDelete('cascade');
@@ -22,12 +30,7 @@ return new class extends Migration
         });
 
         // Agregar campo de monto pagado y monto original en ledger_entries
-        Schema::table('ledger_entries', function (Blueprint $table) {
-            $table->decimal('original_amount', 14, 2)->after('amount'); // Monto original
-            $table->decimal('paid_amount', 14, 2)->default(0)->after('original_amount'); // Total abonado
-            $table->decimal('pending_amount', 14, 2)->after('paid_amount'); // Calculado
-            $table->enum('status', ['pending', 'partially_paid', 'paid'])->default('pending')->change();
-        });
+
     }
 
     public function down(): void
