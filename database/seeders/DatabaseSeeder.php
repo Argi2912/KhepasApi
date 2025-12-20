@@ -11,7 +11,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             RolesAndPermissionsSeeder::class, // 1. Roles
             SuperAdminSeeder::class,          // 2. Admin Global
-            DemoTenantSeeder::class,          // 3. Tenant y Datos Operativos
+            //DemoTenantSeeder::class,          // 3. Tenant y Datos Operativos
         ]);
     }
 }
