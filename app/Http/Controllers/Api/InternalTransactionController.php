@@ -25,8 +25,10 @@ class InternalTransactionController extends Controller
             'end_date'   => 'nullable|date',
         ]);
 
+        // ✅ CAMBIO 1: Agregamos 'entity' aquí. 
+        // Esto hace que Laravel le envíe al Frontend quién es la persona (Cliente, Empleado, etc.)
         $query = InternalTransaction::query()
-            ->with(['user:id,name', 'account:id,name,currency_code']);
+            ->with(['user:id,name', 'account:id,name,currency_code', 'entity']); 
 
         $query->when($request->account_id, fn($q, $id) => $q->where('account_id', $id));
         $query->when($request->type, fn($q, $type) => $q->where('type', $type));
@@ -36,24 +38,26 @@ class InternalTransactionController extends Controller
         return $query->latest('transaction_date')->paginate(15);
     }
 
-   public function store(Request $request)
+    public function store(Request $request)
     {
         $validated = $request->validate([
-            'account_id'   => 'required|exists:accounts,id',
-            'user_id'      => 'required|exists:users,id',
-            'type'         => 'required|in:income,expense',
-            'category'     => 'required|string|max:100',
-            'amount'       => 'required|numeric|min:0.01',
-            'description'  => 'nullable|string|max:500',
+            'account_id'       => 'required|exists:accounts,id',
+            'user_id'          => 'required|exists:users,id',
+            'type'             => 'required|in:income,expense',
+            'category'         => 'required|string|max:100',
+            'amount'           => 'required|numeric|min:0.01',
+            'description'      => 'nullable|string|max:500',
             'transaction_date' => 'nullable|date',
+            'dueño'            => 'nullable|string|max:255',
+            'person_name'      => 'nullable|string|max:255',
 
-            // --- AGREGA ESTAS LÍNEAS ---
-            'dueño'       => 'nullable|string|max:255', // O 'required' si es obligatorio
-            'person_name' => 'nullable|string|max:255', // O 'required' si es obligatorio
+            // ✅ CAMBIO 2: Agregamos estos dos campos.
+            // Sin esto, Laravel ignora la relación y no guarda quién es el cliente en la base de datos.
+            'entity_type'      => 'nullable|string|max:255',
+            'entity_id'        => 'nullable|integer',
         ]);
 
         try {
-            // Ahora $validated ya incluye 'dueño' y 'person_name'
             $transaction = $this->transactionService->createInternalTransaction($validated);
             return response()->json($transaction, 201);
         } catch (\Exception $e) {
@@ -61,26 +65,25 @@ class InternalTransactionController extends Controller
         }
     }
 
-    // 🚨 NUEVO MÉTODO SHOW BLINDADO
+    // 🚨 MÉTODO SHOW BLINDADO (Se mantiene igual, solo agregamos una línea)
     public function show($id)
     {
-        // 1. Buscar sin scopes globales para encontrarlo sí o sí
         $tx = InternalTransaction::withoutGlobalScopes()->find($id);
 
         if (!$tx) {
             return response()->json(['message' => 'Transacción no encontrada'], 404);
         }
 
-        // 2. Seguridad Manual (Tenant)
         if ($tx->tenant_id != auth()->user()->tenant_id) {
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
-        // 3. Cargar relaciones manualmente para evitar fallos por soft deletes o scopes
         $user = \App\Models\User::withoutGlobalScopes()->find($tx->user_id);
         $account = \App\Models\Account::withoutGlobalScopes()->find($tx->account_id);
 
-        // 4. Inyectar relaciones
+        // ✅ CAMBIO 3: Cargamos la entidad también en el detalle individual
+        $tx->load('entity');
+
         $tx->setRelation('user', $user);
         $tx->setRelation('account', $account);
 

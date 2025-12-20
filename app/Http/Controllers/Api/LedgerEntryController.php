@@ -1,14 +1,13 @@
 <?php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\CurrencyExchange;
-use App\Models\LedgerEntry; // <--- 1. IMPORTAR MODELO
+use App\Models\LedgerEntry; 
 use App\Services\TransactionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-
-// <--- 2. IMPORTAR PAGINADOR
 
 class LedgerEntryController extends Controller
 {
@@ -20,7 +19,7 @@ class LedgerEntryController extends Controller
     }
 
     /**
-     * Lista las deudas y AHORA TAMBIÉN las compras pendientes si es 'receivable'.
+     * Lista las deudas y compras pendientes.
      */
     public function index(Request $request)
     {
@@ -36,13 +35,18 @@ class LedgerEntryController extends Controller
         // Búsqueda inteligente
         $query->when($request->search, function ($q, $search) {
             $q->where(function ($q) use ($search) {
+                // 1. Buscar en descripción o referencia de transacción
                 $q->where('description', 'like', "%{$search}%")
                     ->orWhereHas('transaction', fn($q) => $q->where('number', 'like', "%{$search}%"))
+                    
+                    // 2. Buscar nombre en las tablas relacionadas
                     ->orWhereHasMorph('entity', [
+                        \App\Models\Employee::class, // <--- ¡AQUÍ FALTABA ESTE!
                         \App\Models\Broker::class,
                         \App\Models\Client::class,
                         \App\Models\Investor::class,
                         \App\Models\Provider::class,
+                        \App\Models\User::class, // Agregué User por si acaso usas usuarios directos
                     ], function ($q, $type) use ($search) {
                         $q->where('name', 'like', "%{$search}%");
 
@@ -50,6 +54,9 @@ class LedgerEntryController extends Controller
                         if ($type === \App\Models\Investor::class) {
                             $q->orWhere('alias', 'like', "%{$search}%");
                         }
+                        
+                        // Opcional: Si tus tablas tienen email, también busca por ahí
+                        // $q->orWhere('email', 'like', "%{$search}%");
                     });
             });
         });
@@ -103,7 +110,7 @@ class LedgerEntryController extends Controller
             ->where('status', 'pending')
             ->sum('amount');
 
-        // 🚨 NUEVO: Sumar Compras Pendientes
+        // Sumar Compras Pendientes
         $receivablePurchases = CurrencyExchange::where('status', 'pending')
             ->whereNotNull('buy_rate')
             ->where('buy_rate', '>', 0)
@@ -121,7 +128,7 @@ class LedgerEntryController extends Controller
 
         return response()->json([
             'payable_total'    => $payable,
-            'receivable_total' => $receivableLedger + $receivablePurchases, // Suma Unificada
+            'receivable_total' => $receivableLedger + $receivablePurchases,
             'top_debts'        => $topPayables,
         ]);
     }

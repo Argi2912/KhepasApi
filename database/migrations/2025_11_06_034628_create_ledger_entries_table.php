@@ -8,44 +8,73 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // 1. Crear tabla de pagos (esto lo dejamos igual)
-        Schema::create('ledger_payments', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('ledger_entry_id')->constrained('ledger_entries')->onDelete('cascade');
-            $table->foreignId('account_id')->constrained('accounts');
-            $table->foreignId('user_id')->constrained('users');
-            $table->decimal('amount', 14, 2);
-            $table->timestamp('payment_date')->useCurrent();
-            $table->text('description')->nullable();
-            $table->timestamps();
+        // Desactivar seguridad de llaves foráneas para evitar conflictos al crear
+        Schema::disableForeignKeyConstraints();
 
-            $table->index(['ledger_entry_id', 'payment_date']);
-        });
+        // 1. CREAR LA TABLA LEDGER_ENTRIES (Si no existe)
+        if (!Schema::hasTable('ledger_entries')) {
+            Schema::create('ledger_entries', function (Blueprint $table) {
+                $table->id();
+                
+                // Columnas requeridas según tu error SQL
+                $table->unsignedBigInteger('tenant_id')->nullable(); 
+                
+                // Para transaction_type y transaction_id
+                $table->nullableMorphs('transaction'); 
+                
+                // Para entity_type y entity_id (Cliente, Empleado, etc)
+                $table->nullableMorphs('entity'); 
 
-        // 2. Modificar ledger_entries (AQUÍ ESTÁ EL CAMBIO)
-        Schema::table('ledger_entries', function (Blueprint $table) {
-            // Campos de montos
-            $table->decimal('original_amount', 14, 2)->after('amount'); 
-            
-            // ---> NUEVA COLUMNA DE MONEDA <---
-            $table->string('currency_code', 3)->default('USD')->after('amount'); 
+                $table->string('type'); // receivable / payable
+                
+                // Status y montos
+                $table->string('status')->default('pending'); // Usamos string para evitar problemas de enum
+                $table->decimal('amount', 14, 2);
+                
+                // Las columnas que te faltaban antes
+                $table->decimal('original_amount', 14, 2);
+                $table->decimal('paid_amount', 14, 2)->default(0);
+                $table->decimal('pending_amount', 14, 2);
+                
+                $table->string('currency_code', 3)->default('USD');
+                $table->text('description')->nullable();
+                $table->date('due_date')->nullable();
 
-            $table->decimal('paid_amount', 14, 2)->default(0)->after('original_amount'); 
-            $table->decimal('pending_amount', 14, 2)->after('paid_amount'); 
-            
-            // Actualizar status
-            $table->enum('status', ['pending', 'partially_paid', 'paid'])->default('pending')->change();
-        });
+                $table->timestamps();
+            });
+        }
+
+        // 2. CREAR LA TABLA LEDGER_PAYMENTS
+        if (!Schema::hasTable('ledger_payments')) {
+            Schema::create('ledger_payments', function (Blueprint $table) {
+                $table->id();
+                
+                // Relación con la tabla de arriba
+                $table->foreignId('ledger_entry_id')
+                      ->constrained('ledger_entries')
+                      ->onDelete('cascade');
+
+                $table->foreignId('account_id')->constrained('accounts');
+                $table->foreignId('user_id')->constrained('users');
+                
+                $table->decimal('amount', 14, 2);
+                $table->timestamp('payment_date')->useCurrent();
+                $table->text('description')->nullable();
+                $table->timestamps();
+
+                $table->index(['ledger_entry_id', 'payment_date']);
+            });
+        }
+
+        // Reactivar seguridad
+        Schema::enableForeignKeyConstraints();
     }
 
     public function down(): void
     {
+        Schema::disableForeignKeyConstraints();
         Schema::dropIfExists('ledger_payments');
-
-        Schema::table('ledger_entries', function (Blueprint $table) {
-            $table->dropColumn(['original_amount', 'currency_code', 'paid_amount', 'pending_amount']);
-            // Volver a status original
-            $table->enum('status', ['pending', 'paid'])->default('pending');
-        });
+        Schema::dropIfExists('ledger_entries');
+        Schema::enableForeignKeyConstraints();
     }
 };
