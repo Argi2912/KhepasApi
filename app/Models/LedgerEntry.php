@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
@@ -21,6 +22,7 @@ class LedgerEntry extends Model
         'tenant_id',
         'description',
         'amount',
+        'currency_code',
         'type',        // 'payable' o 'receivable'
         'status',      // 'pending' o 'paid'
         'entity_type', // A quién: Provider, Broker, Client
@@ -67,7 +69,7 @@ class LedgerEntry extends Model
         return $this->original_amount - $this->paid_amount;
     }
 
-// Actualizar status automáticamente
+    // Actualizar status automáticamente
     public function getStatusAttribute($value)
     {
         if ($this->paid_amount >= $this->original_amount) {

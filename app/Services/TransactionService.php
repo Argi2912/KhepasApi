@@ -24,7 +24,6 @@ class TransactionService
         return $prefix . str_pad($nextId, 5, '0', STR_PAD_LEFT);
     }
 
-    // ... (El método createCurrencyExchange se queda IGUAL) ...
     public function createCurrencyExchange(array $data)
     {
         return DB::transaction(function () use ($data) {
@@ -37,6 +36,7 @@ class TransactionService
             $amountSent     = (float) $data['amount_sent'];
             $amountReceived = (float) $data['amount_received'];
 
+            // 1. Lógica de Salida de Dinero (Capital Propio)
             if ($capitalType === 'own') {
                 if (empty($data['from_account_id'])) {
                     throw new Exception("Se requiere una cuenta de origen para capital propio.");
@@ -52,34 +52,37 @@ class TransactionService
                 $fromAccountId = $fromAccount->id;
 
                 InternalTransaction::create([
-                    'tenant_id'   => $tenantId,
-                    'user_id'     => $data['admin_user_id'],
-                    'account_id'  => $fromAccount->id,
-                    'type'        => 'expense',
-                    'category'    => 'Intercambio Enviado',
-                    'amount'      => $amountSent,
-                    'description' => "Salida Intercambio {$exchangeNumber}",
+                    'tenant_id'        => $tenantId,
+                    'user_id'          => $data['admin_user_id'],
+                    'account_id'       => $fromAccount->id,
+                    'type'             => 'expense',
+                    'category'         => 'Intercambio Enviado',
+                    'amount'           => $amountSent,
+                    'description'      => "Salida Intercambio {$exchangeNumber}",
                     'transaction_date' => now(),
                 ]);
             }
 
+            // 2. Lógica de Entrada de Dinero (Cuenta Destino)
             $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
             $toAccount->increment('balance', $amountReceived);
 
             InternalTransaction::create([
-                'tenant_id'   => $tenantId,
-                'user_id'     => $data['admin_user_id'],
-                'account_id'  => $toAccount->id,
-                'type'        => 'income',
-                'category'    => 'Intercambio Recibido',
-                'amount'      => $amountReceived,
-                'description' => "Entrada Intercambio {$exchangeNumber}" . ($fromAccount ? " desde {$fromAccount->name}" : " (Inversionista)"),
+                'tenant_id'        => $tenantId,
+                'user_id'          => $data['admin_user_id'],
+                'account_id'       => $toAccount->id,
+                'type'             => 'income',
+                'category'         => 'Intercambio Recibido',
+                'amount'           => $amountReceived,
+                'description'      => "Entrada Intercambio {$exchangeNumber}" . ($fromAccount ? " desde {$fromAccount->name}" : " (Inversionista)"),
                 'transaction_date' => now(),
             ]);
 
+            // 3. Crear Registro Principal de Intercambio
             $exchange = CurrencyExchange::create([
                 'tenant_id'                  => $tenantId,
                 'number'                     => $exchangeNumber,
+                'type'                       => $data['type'] ?? 'exchange',
                 'client_id'                  => $data['client_id'] ?? null,
                 'broker_id'                  => $data['broker_id'] ?? null,
                 'provider_id'                => $data['provider_id'] ?? null,
@@ -103,14 +106,21 @@ class TransactionService
                 'status'                     => $data['status'] ?? 'completed',
             ]);
 
-            // D.1. Comisión PROVEEDOR
+            // --- DETERMINAR MONEDAS PARA ASIENTOS CONTABLES ---
+            // Moneda de Salida: Si hay cuenta origen, es su moneda. Si no (Inversionista), asumimos la moneda destino por defecto o se podría ajustar.
+            $currencyOut = $fromAccount ? $fromAccount->currency_code : $toAccount->currency_code;
+            // Moneda de Entrada: Siempre es la moneda de la cuenta destino.
+            $currencyIn  = $toAccount->currency_code;
+
+            // D.1. Comisión PROVEEDOR (Se paga en la moneda que sale)
             $providerCommAmount = (float) ($data['commission_provider_amount'] ?? 0);
             $providerId         = $data['provider_id'] ?? null;
             if ($providerCommAmount > 0 && $providerId) {
                 $exchange->ledgerEntries()->create([
-                    'tenant_id'   => $exchange->tenant_id,
-                    'description' => "Comisión Proveedor (Op. #{$exchange->number})",
+                    'tenant_id'        => $exchange->tenant_id,
+                    'description'      => "Comisión Proveedor (Op. #{$exchange->number})",
                     'amount'           => $providerCommAmount,
+                    'currency_code'    => $currencyOut, // <--- MODIFICADO
                     'type'             => 'payable',
                     'status'           => 'pending',
                     'entity_id'        => $providerId,
@@ -120,16 +130,17 @@ class TransactionService
                 ]);
             }
 
-            // D.2. Comisión BROKER
+            // D.2. Comisión BROKER (Se paga en la moneda que sale)
             $brokerCommAmount = (float) ($data['commission_broker_amount'] ?? 0);
             $brokerId         = $data['broker_id'] ?? null;
             if ($brokerCommAmount > 0 && $brokerId) {
                 $broker = Broker::find($brokerId);
                 if ($broker) {
                     $exchange->ledgerEntries()->create([
-                        'tenant_id'   => $exchange->tenant_id,
-                        'description' => "Comisión Corredor (Op. #{$exchange->number})",
+                        'tenant_id'        => $exchange->tenant_id,
+                        'description'      => "Comisión Corredor (Op. #{$exchange->number})",
                         'amount'           => $brokerCommAmount,
+                        'currency_code'    => $currencyOut, // <--- MODIFICADO
                         'type'             => 'payable',
                         'status'           => 'pending',
                         'entity_id'        => $broker->id,
@@ -140,14 +151,15 @@ class TransactionService
                 }
             }
 
-            // D.3. Costo PLATAFORMA
+            // D.3. Costo PLATAFORMA (Se paga en la moneda que sale)
             $platformCommAmount = (float) ($data['commission_admin_amount'] ?? 0);
             $platformId         = $data['platform_id'] ?? null;
             if ($platformCommAmount > 0 && $platformId) {
                 $exchange->ledgerEntries()->create([
-                    'tenant_id'   => $exchange->tenant_id,
-                    'description' => "Costo Plataforma (Op. #{$exchange->number})",
+                    'tenant_id'        => $exchange->tenant_id,
+                    'description'      => "Costo Plataforma (Op. #{$exchange->number})",
                     'amount'           => $platformCommAmount,
+                    'currency_code'    => $currencyOut, // <--- MODIFICADO
                     'type'             => 'payable',
                     'status'           => 'pending',
                     'entity_id'        => $platformId,
@@ -157,7 +169,7 @@ class TransactionService
                 ]);
             }
 
-            // D.4. Comisión Ganada
+            // D.4. Comisión Ganada (Se cobra en la moneda que entra - destino)
             $companyCommAmount = (float) ($data['commission_charged_amount'] ?? 0);
             if ($companyCommAmount > 0 && ! empty($exchange->client_id)) {
                 $client     = Client::find($exchange->client_id);
@@ -166,9 +178,10 @@ class TransactionService
 
                 if ($client) {
                     $exchange->ledgerEntries()->create([
-                        'tenant_id'   => $exchange->tenant_id,
-                        'description' => "Comisión de Casa - Op. #{$exchange->number}",
+                        'tenant_id'        => $exchange->tenant_id,
+                        'description'      => "Comisión de Casa - Op. #{$exchange->number}",
                         'amount'           => $companyCommAmount,
+                        'currency_code'    => $currencyIn, // <--- MODIFICADO (Moneda entrante)
                         'type'             => 'receivable',
                         'status'           => $status,
                         'entity_id'        => $client->id,
@@ -248,7 +261,7 @@ class TransactionService
                 'amount'           => $data['amount'],
                 'description'      => $data['description'] ?? null,
                 'transaction_date' => $data['transaction_date'] ?? now(),
-                
+
                 // ✅ AQUÍ AGREGAMOS LOS CAMPOS PARA QUE SE GUARDEN EN LA BD
                 'dueño'            => $data['dueño'] ?? null,
                 'person_name'      => $data['person_name'] ?? null,

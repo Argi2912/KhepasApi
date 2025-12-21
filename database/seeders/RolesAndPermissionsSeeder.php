@@ -14,22 +14,31 @@ class RolesAndPermissionsSeeder extends Seeder
         // 1. Limpiar caché de permisos
         app()[PermissionRegistrar::class]->forgetCachedPermissions();
 
-        // 2. Definir Permisos del Sistema
+        // 2. Definir Permisos (Estos son los que el sistema verificará)
         $permissions = [
             'manage_tenants',               // Superadmin
-            
-            // Administración del Tenant
+
+            // --- Administración ---
             'view_dashboard',
             'view_statistics',
             'view_database_history',
             'manage_users',
-            'manage_clients',               // Incluye Proveedores
+            'manage_employees',             // (Faltaba este para RRHH/Admin)
+
+            // --- Relaciones Comerciales ---
+            'manage_clients',               // Clientes y Proveedores
+            'manage_investors',             // (Faltaba este para Inversionistas)
+            'manage_brokers',               // (Faltaba este para Corredores)
+
+            // --- Configuración Financiera ---
             'manage_platforms',             // Bancos y Plataformas
-            
-            // --- Módulos Financieros ---
-            'manage_transaction_requests',  // Ver solicitudes de clientes
-            'manage_internal_transactions', // Caja Menor / Gastos / Ingresos
-            'manage_exchanges',             // Operaciones de Cambio y Compra
+            'manage_finance',               // (Faltaba este para Cuentas y Divisas)
+
+            // --- Módulos Operativos y Reportes ---
+            'view_reports',                 // (Faltaba este para el Analista)
+            'manage_transaction_requests',
+            'manage_internal_transactions', // Caja Menor / Gastos
+            'manage_exchanges',             // Mesa de Cambio
         ];
 
         foreach ($permissions as $permissionName) {
@@ -42,41 +51,43 @@ class RolesAndPermissionsSeeder extends Seeder
         Role::firstOrCreate(['name' => 'superadmin'])
             ->syncPermissions(['manage_tenants']);
 
-        // B. ADMIN TENANT (Dueño del Negocio)
+        // B. ADMIN TENANT (Dueño del Negocio) - VE TODO
         Role::firstOrCreate(['name' => 'admin_tenant'])
             ->syncPermissions([
                 'view_dashboard',
                 'view_statistics',
                 'view_database_history',
                 'manage_users',
+                'manage_employees',         // ✅ Ahora ve Empleados
                 'manage_clients',
+                'manage_investors',         // ✅ Ahora ve Inversionistas
+                'manage_brokers',           // ✅ Ahora ve Corredores
                 'manage_platforms',
+                'manage_finance',           // ✅ Ahora ve Config. Financiera
+                'view_reports',             // ✅ Ahora ve Reportes
                 'manage_transaction_requests',
                 'manage_internal_transactions',
                 'manage_exchanges',
             ]);
 
-        // C. CAJERO (Operativo)
+        // C. CAJERO (Operativo) - Solo Operaciones y Clientes
         Role::firstOrCreate(['name' => 'cajero'])
             ->syncPermissions([
-                'view_dashboard', 
-                'manage_transaction_requests', 
-                'manage_exchanges',            
-                'manage_internal_transactions',
-                'manage_clients' // A menudo el cajero registra clientes
+                'view_dashboard',
+                'manage_transaction_requests',
+                'manage_exchanges',
+                'manage_clients'
+                // NOTA: No le damos 'manage_internal_transactions' (Caja fuerte)
+                // ni 'manage_finance' (Configuración de bancos).
             ]);
 
-        // D. ANALISTA (Auditoría)
+        // D. ANALISTA (Auditoría) - Solo Reportes y Estadísticas
         Role::firstOrCreate(['name' => 'analista'])
             ->syncPermissions([
-                'view_dashboard', 
-                'view_statistics', 
-                'view_database_history'
+                'view_dashboard',
+                'view_statistics',
+                'view_database_history',
+                'view_reports'              // ✅ Permiso clave para ver el módulo
             ]);
-            
-        // E. CORREDOR (Rol de usuario, si se requiere acceso al sistema)
-        // Nota: Aunque los Brokers son entidades, podrían tener un usuario para ver sus comisiones.
-        /* Role::firstOrCreate(['name' => 'corredor'])
-            ->syncPermissions(['view_dashboard']); */
     }
 }

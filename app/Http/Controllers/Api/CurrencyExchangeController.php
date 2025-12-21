@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -97,6 +98,7 @@ class CurrencyExchangeController extends Controller
 
         $dataToService = $validatedData;
 
+        $dataToService['type'] = $request->operation_type;
         // Mapeo de datos opcionales
         $dataToService['buy_rate']      = $request->get('buy_rate', null);
         $dataToService['received_rate'] = $request->get('received_rate', null);
@@ -136,22 +138,21 @@ class CurrencyExchangeController extends Controller
 
     public function markDelivered(CurrencyExchange $exchange)
     {
-        if (! $exchange->buy_rate || $exchange->buy_rate <= 0) {
-            return response()->json(['message' => 'Solo aplicable a compras de divisa'], 400);
+        // 1. VALIDACIÓN ROBUSTA DE TIPO (Implementada en el paso anterior)
+        if ($exchange->type !== 'purchase') {
+            return response()->json(['message' => 'Solo aplicable a compras de divisa (cash)'], 400);
         }
 
         if ($exchange->status === 'completed') {
             return response()->json(['message' => 'Ya está marcada como entregada'], 400);
         }
 
+        // 2. SEGURIDAD: Usar Permisos en lugar de Roles fijos
+        // Usamos 'manage_exchanges' que ya tienes definido en tus rutas,
+        // o podrías crear uno específico como 'mark_exchange_delivered'.
         $user = Auth::user();
-        $user->load('roles');
-
-        $userRoles    = $user->roles->pluck('name')->toArray();
-        $allowedRoles = ['admin', 'cashier', 'admin_tenant', 'superadmin'];
-
-        if (empty(array_intersect($userRoles, $allowedRoles))) {
-            return response()->json(['message' => 'No tienes permiso.'], 403);
+        if (! $user->can('manage_exchanges') && ! $user->hasRole('superadmin')) {
+            return response()->json(['message' => 'No tienes permiso para confirmar entregas.'], 403);
         }
 
         $exchange->status = 'completed';

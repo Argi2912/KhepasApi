@@ -33,7 +33,7 @@ use App\Http\Controllers\Api\Superadmin\TenantController;
 use App\Http\Controllers\Api\TenantUserController;
 use App\Http\Controllers\Api\TransactionRequestController;
 // AGREGAMOS ESTA IMPORTACIÓN QUE FALTABA
-use App\Http\Controllers\Api\EmployeeController; 
+use App\Http\Controllers\Api\EmployeeController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -41,6 +41,7 @@ use Illuminate\Support\Facades\Route;
 | 1. RUTAS PÚBLICAS
 |--------------------------------------------------------------------------
 */
+
 Route::post('login', [AuthController::class, 'login']);
 
 /*
@@ -81,7 +82,7 @@ Route::group(['middleware' => ['auth:api']], function () {
 
     Route::get('/reports/profit-matrix', [App\Http\Controllers\Api\ReportController::class, 'profitMatrix']);
 
-// Opcional: Agrega las rutas para el resto de los reportes para ser consistentes
+    // Opcional: Agrega las rutas para el resto de los reportes para ser consistentes
     Route::get('statistics/clients', [StatisticsController::class, 'getClientReport'])
         ->middleware('permission:view_statistics');
 
@@ -92,10 +93,10 @@ Route::group(['middleware' => ['auth:api']], function () {
         ->middleware('permission:view_statistics');
 
     Route::get('statistics/investors', [StatisticsController::class, 'getInvestorReport'])
-    ->middleware('permission:view_statistics');
+        ->middleware('permission:view_statistics');
 
     Route::apiResource('employees', \App\Http\Controllers\Api\EmployeeController::class);
-    
+
     // AQUÍ ESTÁ LA RUTA CORRECTA (La dejé aquí y borré la de abajo)
     Route::post('/employees/process-payroll', [EmployeeController::class, 'processPayroll']);
 
@@ -180,5 +181,4 @@ Route::group(['middleware' => ['auth:api']], function () {
 
     Route::apiResource('users', TenantUserController::class)
         ->middleware('permission:manage_users');
-
 });
