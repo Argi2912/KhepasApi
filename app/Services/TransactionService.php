@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Services;
 
 use App\Models\Account;
@@ -23,27 +24,19 @@ class TransactionService
         return $prefix . str_pad($nextId, 5, '0', STR_PAD_LEFT);
     }
 
-    /**
-     * Crea Intercambio + Movimiento de Saldos + Asientos Contables (Incluyendo Inversionistas)
-     */
+    // ... (El método createCurrencyExchange se queda IGUAL) ...
     public function createCurrencyExchange(array $data)
     {
         return DB::transaction(function () use ($data) {
-
-            // 1. Generamos el número secuencial
             $exchangeNumber = $this->generateSequentialNumber(CurrencyExchange::class, 'CE-');
             $tenantId       = Auth::user()->tenant_id ?? 1;
 
-            // Variables iniciales
             $fromAccount    = null;
             $fromAccountId  = null;
             $capitalType    = $data['capital_type'] ?? 'own';
             $amountSent     = (float) $data['amount_sent'];
             $amountReceived = (float) $data['amount_received'];
 
-            // -------------------------------------------------------------
-            // A. LÓGICA DE CUENTA ORIGEN (SOLO SI ES CAPITAL PROPIO)
-            // -------------------------------------------------------------
             if ($capitalType === 'own') {
                 if (empty($data['from_account_id'])) {
                     throw new Exception("Se requiere una cuenta de origen para capital propio.");
@@ -51,16 +44,13 @@ class TransactionService
 
                 $fromAccount = Account::lockForUpdate()->findOrFail($data['from_account_id']);
 
-                // Validar saldo
                 if ($fromAccount->balance < $amountSent) {
                     throw new Exception("Saldo insuficiente en {$fromAccount->name} para enviar {$amountSent} {$fromAccount->currency_code}.");
                 }
 
-                // Descontar saldo
                 $fromAccount->decrement('balance', $amountSent);
                 $fromAccountId = $fromAccount->id;
 
-                // Registro Historial Caja (Salida)
                 InternalTransaction::create([
                     'tenant_id'   => $tenantId,
                     'user_id'     => $data['admin_user_id'],
@@ -73,13 +63,9 @@ class TransactionService
                 ]);
             }
 
-            // -------------------------------------------------------------
-            // B. LÓGICA DE CUENTA DESTINO (SIEMPRE ENTRA DINERO)
-            // -------------------------------------------------------------
             $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
             $toAccount->increment('balance', $amountReceived);
 
-            // Registro Historial Caja (Entrada)
             InternalTransaction::create([
                 'tenant_id'   => $tenantId,
                 'user_id'     => $data['admin_user_id'],
@@ -91,10 +77,6 @@ class TransactionService
                 'transaction_date' => now(),
             ]);
 
-            // -------------------------------------------------------------
-            // C. CREAR EL MODELO PRINCIPAL
-            // -------------------------------------------------------------
-
             $exchange = CurrencyExchange::create([
                 'tenant_id'                  => $tenantId,
                 'number'                     => $exchangeNumber,
@@ -103,34 +85,25 @@ class TransactionService
                 'provider_id'                => $data['provider_id'] ?? null,
                 'platform_id'                => $data['platform_id'] ?? null,
                 'admin_user_id'              => $data['admin_user_id'],
-
-                'from_account_id'            => $fromAccountId, // ID o NULL
+                'from_account_id'            => $fromAccountId,
                 'to_account_id'              => $toAccount->id,
                 'amount_sent'                => $amountSent,
                 'amount_received'            => $amountReceived,
                 'exchange_rate'              => $data['exchange_rate'],
                 'buy_rate'                   => $data['buy_rate'] ?? null,
                 'received_rate'              => $data['received_rate'] ?? null,
-
                 'commission_total_amount'    => $data['commission_total_amount'] ?? 0,
                 'commission_provider_amount' => $data['commission_provider_amount'] ?? 0,
                 'commission_admin_amount'    => $data['commission_admin_amount'] ?? 0,
-
-                // --- CAMPOS DE INVERSIONISTA ---
                 'capital_type'               => $capitalType,
                 'investor_id'                => $data['investor_id'] ?? null,
                 'investor_profit_pct'        => $data['investor_profit_pct'] ?? 0,
                 'investor_profit_amount'     => $data['investor_profit_amount'] ?? 0,
-
                 'reference_id'               => $data['reference_id'] ?? null,
                 'status'                     => $data['status'] ?? 'completed',
             ]);
 
-            // =================================================================
-            // D. GENERAR ASIENTOS (CUENTAS POR PAGAR)
-            // =================================================================
-
-            // D.1. Comisión PROVEEDOR (CxP)
+            // D.1. Comisión PROVEEDOR
             $providerCommAmount = (float) ($data['commission_provider_amount'] ?? 0);
             $providerId         = $data['provider_id'] ?? null;
             if ($providerCommAmount > 0 && $providerId) {
@@ -147,7 +120,7 @@ class TransactionService
                 ]);
             }
 
-            // D.2. Comisión CORREDOR/BROKER (CxP)
+            // D.2. Comisión BROKER
             $brokerCommAmount = (float) ($data['commission_broker_amount'] ?? 0);
             $brokerId         = $data['broker_id'] ?? null;
             if ($brokerCommAmount > 0 && $brokerId) {
@@ -167,7 +140,7 @@ class TransactionService
                 }
             }
 
-            // D.3. Costo PLATAFORMA (CxP)
+            // D.3. Costo PLATAFORMA
             $platformCommAmount = (float) ($data['commission_admin_amount'] ?? 0);
             $platformId         = $data['platform_id'] ?? null;
             if ($platformCommAmount > 0 && $platformId) {
@@ -184,18 +157,7 @@ class TransactionService
                 ]);
             }
 
-            // =================================================================
-            // E. LÓGICA DE INVERSIONISTA (Solo Informativo)
-            // =================================================================
-            // MODIFICACIÓN: No generamos asientos contables ni alteramos saldo.
-            // La rentabilidad se calcula por fecha (Interés Compuesto) y no por operación.
-            // La relación ya quedó guardada en el modelo CurrencyExchange (investor_id) en el paso C.
-            if ($capitalType === 'investor' && ! empty($data['investor_id'])) {
-                // Aquí podrías validar si el inversionista existe o está activo si lo deseas,
-                // pero no creamos ledgerEntries para no duplicar deuda.
-            }
-
-            // D.4. Comisión Ganada (CxC - Opcional)
+            // D.4. Comisión Ganada
             $companyCommAmount = (float) ($data['commission_charged_amount'] ?? 0);
             if ($companyCommAmount > 0 && ! empty($exchange->client_id)) {
                 $client     = Client::find($exchange->client_id);
@@ -221,9 +183,6 @@ class TransactionService
         });
     }
 
-    /**
-     * Pago de deudas (Sin cambios mayores, lógica genérica)
-     */
     public function processDebtPayment(LedgerEntry $entry, int $accountId)
     {
         return DB::transaction(function () use ($entry, $accountId) {
@@ -265,6 +224,7 @@ class TransactionService
         });
     }
 
+    // 🔥 ESTA ES LA FUNCIÓN CLAVE QUE NECESITABA AJUSTE 🔥
     public function createInternalTransaction(array $data)
     {
         return DB::transaction(function () use ($data) {
@@ -286,10 +246,14 @@ class TransactionService
                 'type'             => $data['type'],
                 'category'         => $data['category'],
                 'amount'           => $data['amount'],
-                'description'      => $data['description'],
+                'description'      => $data['description'] ?? null,
                 'transaction_date' => $data['transaction_date'] ?? now(),
+                
+                // ✅ AQUÍ AGREGAMOS LOS CAMPOS PARA QUE SE GUARDEN EN LA BD
                 'dueño'            => $data['dueño'] ?? null,
                 'person_name'      => $data['person_name'] ?? null,
+                'entity_type'      => $data['entity_type'] ?? null,
+                'entity_id'        => $data['entity_id'] ?? null,
             ]);
         });
     }
@@ -312,7 +276,6 @@ class TransactionService
                 $category = 'Cobro de Crédito';
             }
 
-            // Registrar movimiento interno
             $internalTx = InternalTransaction::create([
                 'tenant_id'   => $entry->tenant_id,
                 'user_id'     => Auth::id(),
@@ -324,8 +287,7 @@ class TransactionService
                 'transaction_date' => now(),
             ]);
 
-            // Registrar abono
-            $payment = $entry->payments()->create([
+            $entry->payments()->create([
                 'account_id'   => $accountId,
                 'user_id'      => Auth::id(),
                 'amount'       => $amount,
@@ -333,31 +295,22 @@ class TransactionService
                 'payment_date' => now(),
             ]);
 
-            // Actualizar monto pagado
             $entry->increment('paid_amount', $amount);
 
             return $internalTx;
         });
     }
 
-    /**
-     * Agrega saldo a favor (Fondeo / Recarga Manual) a un Proveedor o Inversionista.
-     * Crea un registro 'payable' en el Ledger (La empresa le debe dinero al usuario).
-     * * @param mixed $entity Instancia de Provider o Investor
-     * @param float $amount Monto a agregar
-     * @param string|null $description Descripción del movimiento
-     */
     public function addBalanceToEntity($entity, float $amount, ?string $description = 'Recarga de saldo')
     {
         return DB::transaction(function () use ($entity, $amount, $description) {
-            
             return $entity->ledgerEntries()->create([
                 'tenant_id'        => Auth::user()->tenant_id ?? 1,
                 'description'      => $description,
                 'amount'           => $amount,
                 'original_amount'  => $amount,
                 'paid_amount'      => 0,
-                'type'             => 'payable', // Payable = Saldo a favor (Deuda de la empresa hacia la entidad)
+                'type'             => 'payable',
                 'status'           => 'pending',
                 'due_date'         => now(),
                 'transaction_type' => get_class($entity),

@@ -8,59 +8,73 @@ return new class extends Migration
 {
     public function up(): void
     {
-        // 1. CORRECCIÓN PRINCIPAL: Usar 'create' en lugar de 'table'
-        Schema::create('ledger_entries', function (Blueprint $table) {
-            $table->id();
+        // Desactivar seguridad de llaves foráneas para evitar conflictos al crear
+        Schema::disableForeignKeyConstraints();
 
-            // Relación con Tenant
-            $table->foreignId('tenant_id')->constrained('tenants')->onDelete('cascade');
+        // 1. CREAR LA TABLA LEDGER_ENTRIES (Si no existe)
+        if (!Schema::hasTable('ledger_entries')) {
+            Schema::create('ledger_entries', function (Blueprint $table) {
+                $table->id();
 
-            $table->string('description');
+                // Columnas requeridas según tu error SQL
+                $table->unsignedBigInteger('tenant_id')->nullable();
 
-            // Montos Financieros
-            $table->decimal('amount', 14, 2);           // Monto actual/principal
-            $table->decimal('original_amount', 14, 2);  // Monto inicial de la deuda
-            $table->decimal('paid_amount', 14, 2)->default(0); // Lo que ya se pagó
-            $table->decimal('pending_amount', 14, 2);   // Lo que falta (calculado)
+                // Para transaction_type y transaction_id
+                $table->nullableMorphs('transaction');
 
-            // Moneda (Según tu tabla es 'currency_type' varchar(5))
-            $table->string('currency_type', 5)->nullable();
+                // Para entity_type y entity_id (Cliente, Empleado, etc)
+                $table->nullableMorphs('entity');
 
-            // Tipos y Estados
-            $table->enum('type', ['payable', 'receivable']);
-            $table->enum('status', ['pending', 'partially_paid', 'paid'])->default('pending');
+                $table->string('type'); // receivable / payable
 
-            // Relación Polimórfica: A QUIÉN (Provider, Broker, Client)
-            $table->string('entity_type');
-            $table->unsignedBigInteger('entity_id');
-            $table->index(['entity_type', 'entity_id']);
+                // Status y montos
+                $table->string('status')->default('pending'); // Usamos string para evitar problemas de enum
+                $table->decimal('amount', 14, 2);
 
-            // Relación Polimórfica: ORIGEN (CurrencyExchange, DollarPurchase)
-            $table->nullableMorphs('transaction');
+                // Las columnas que te faltaban antes
+                $table->decimal('original_amount', 14, 2);
+                $table->decimal('paid_amount', 14, 2)->default(0);
+                $table->decimal('pending_amount', 14, 2);
 
-            $table->date('due_date')->nullable();
-            $table->timestamps();
-        });
+                $table->string('currency_code', 3)->default('USD');
+                $table->text('description')->nullable();
+                $table->date('due_date')->nullable();
 
-        // Creación de la tabla de pagos (esto ya estaba bien, usa 'create')
-        Schema::create('ledger_payments', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('ledger_entry_id')->constrained('ledger_entries')->onDelete('cascade');
-            $table->foreignId('account_id')->constrained('accounts');
-            $table->foreignId('user_id')->constrained('users');
-            $table->decimal('amount', 14, 2);
-            $table->timestamp('payment_date')->useCurrent();
-            $table->text('description')->nullable();
-            $table->timestamps();
+                $table->timestamps();
+            });
+        }
 
-            $table->index(['ledger_entry_id', 'payment_date']);
-        });
+        // 2. CREAR LA TABLA LEDGER_PAYMENTS
+        if (!Schema::hasTable('ledger_payments')) {
+            Schema::create('ledger_payments', function (Blueprint $table) {
+                $table->id();
+
+                // Relación con la tabla de arriba
+                $table->foreignId('ledger_entry_id')
+                    ->constrained('ledger_entries')
+                    ->onDelete('cascade');
+
+                $table->foreignId('account_id')->constrained('accounts');
+                $table->foreignId('user_id')->constrained('users');
+
+                $table->decimal('amount', 14, 2);
+                $table->timestamp('payment_date')->useCurrent();
+                $table->text('description')->nullable();
+                $table->timestamps();
+
+                $table->index(['ledger_entry_id', 'payment_date']);
+            });
+        }
+
+        // Reactivar seguridad
+        Schema::enableForeignKeyConstraints();
     }
 
     public function down(): void
     {
-        // 2. CORRECCIÓN EN DOWN: Borrar las tablas completas
+        Schema::disableForeignKeyConstraints();
         Schema::dropIfExists('ledger_payments');
         Schema::dropIfExists('ledger_entries');
+        Schema::enableForeignKeyConstraints();
     }
 };

@@ -32,6 +32,8 @@ use App\Http\Controllers\Api\Superadmin\ActivityLogController;
 use App\Http\Controllers\Api\Superadmin\TenantController;
 use App\Http\Controllers\Api\TenantUserController;
 use App\Http\Controllers\Api\TransactionRequestController;
+// AGREGAMOS ESTA IMPORTACIÓN QUE FALTABA
+use App\Http\Controllers\Api\EmployeeController; 
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -88,6 +90,14 @@ Route::group(['middleware' => ['auth:api']], function () {
 
     Route::get('statistics/brokers', [StatisticsController::class, 'getBrokerReport'])
         ->middleware('permission:view_statistics');
+
+    Route::get('statistics/investors', [StatisticsController::class, 'getInvestorReport'])
+    ->middleware('permission:view_statistics');
+
+    Route::apiResource('employees', \App\Http\Controllers\Api\EmployeeController::class);
+    
+    // AQUÍ ESTÁ LA RUTA CORRECTA (La dejé aquí y borré la de abajo)
+    Route::post('/employees/process-payroll', [EmployeeController::class, 'processPayroll']);
 
     // --- C. Catálogos y Recursos ---
     Route::apiResource('clients', ClientController::class)
@@ -161,6 +171,8 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::post('investors/{investor}/balance', [InvestorController::class, 'addBalance']);
 
     Route::apiResource('investors', InvestorController::class);
+
+    // [BORRADO] Aquí tenías la línea duplicada que daba error. Ya no hace falta.
 
     // --- G. Gestión de Usuarios ---
     Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])

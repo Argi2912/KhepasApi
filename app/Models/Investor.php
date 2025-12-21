@@ -11,7 +11,6 @@ class Investor extends Model
 {
     use HasFactory, BelongsToTenant; 
 
-    // AQUÍ ESTABA EL DETALLE: Agregamos los nuevos campos permitidos
     protected $fillable = [
         'tenant_id', 
         'name', 
@@ -19,10 +18,14 @@ class Investor extends Model
         'email', 
         'phone', 
         'is_active',
-        'interest_rate',      // <--- Nuevo
-        'payout_day',         // <--- Nuevo
-        'last_interest_date'  // <--- Nuevo
+        'interest_rate',
+        'payout_day',
+        'last_interest_date'
     ];
+
+    // 🚨 ESTO FALTABA: 
+    // Le dice a Laravel: "Siempre envía 'available_balance' cuando te pidan un Inversionista"
+    protected $appends = ['available_balance'];
 
     // Relación con operaciones de cambio
     public function exchanges()
@@ -36,7 +39,8 @@ class Investor extends Model
         return $this->morphMany(LedgerEntry::class, 'entity');
     }
 
-    // CÁLCULO DE SALDO REAL (Original - Pagado)
+    // CÁLCULO DE SALDO REAL (Tu lógica original)
+    // Laravel convertirá esto al atributo JSON: "available_balance"
     public function getAvailableBalanceAttribute()
     {
         return $this->ledgerEntries()
