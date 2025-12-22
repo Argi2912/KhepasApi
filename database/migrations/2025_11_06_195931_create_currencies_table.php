@@ -12,7 +12,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('currencies', function (Blueprint $table) {
-            $table->string('code', 5)->primary(); // USD, VES, EUR
+            $table->id();
+            $table->string('code', 5); // USD, VES, EUR
             $table->string('name', 50)->unique(); // Dólar Americano, Bolívar Soberano, Euro
             $table->unsignedBigInteger('tenant_id')->nullable(); 
             $table->foreign('tenant_id')->references('id')->on('tenants')->onDelete('cascade');

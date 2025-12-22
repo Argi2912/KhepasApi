@@ -5,6 +5,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Currency;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Auth;
 
 class CurrencyController extends Controller
 {
@@ -24,11 +25,29 @@ class CurrencyController extends Controller
 
     public function store(Request $request)
     {
+        $tenantId = Auth::user()->tenant_id;
+
         $validated = $request->validate([
-            // La validación se hace contra la clave primaria 'code'
-            'code' => ['required', 'string', 'bail', Rule::unique('currencies', 'code')],
-            'name' => ['required', 'string', 'max:50', 'bail', Rule::unique('currencies', 'name')],
+            'code' => [
+                'required', 
+                'string', 
+                'max:5', 
+                Rule::unique('currencies')->where(function ($query) use ($tenantId) {
+                    return $query->where('tenant_id', $tenantId);
+                }),
+            ],
+            'name' => [
+                'required', 
+                'string', 
+                'max:50',
+                Rule::unique('currencies')->where(function ($query) use ($tenantId) {
+                    return $query->where('tenant_id', $tenantId);
+                }),
+            ],
         ]);
+
+        // Aseguramos que se guarde con el tenant_id
+        $validated['tenant_id'] = $tenantId;
 
         $currency = Currency::create($validated);
 
@@ -42,9 +61,18 @@ class CurrencyController extends Controller
 
     public function update(Request $request, Currency $currency)
     {
+        $tenantId = Auth::user()->tenant_id;
+
         $validated = $request->validate([
-            // Solo se permite actualizar el nombre
-            'name' => ['required', 'string', 'max:50', Rule::unique('currencies', 'name')->ignore($currency->code, 'code')],
+            'name' => [
+                'required', 
+                'string', 
+                'max:50', 
+                // Ignoramos la divisa actual ($currency->id) pero validamos en el tenant
+                Rule::unique('currencies')->ignore($currency->id)->where(function ($query) use ($tenantId) {
+                    return $query->where('tenant_id', $tenantId);
+                }),
+            ],
         ]);
 
         $currency->update($validated);
