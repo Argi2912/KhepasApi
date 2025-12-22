@@ -11,10 +11,6 @@ class Currency extends Model
 {
     use HasFactory, BelongsToTenant, Filterable;
 
-    // La clave primaria es 'code' y no es autoincremental
-    protected $primaryKey = 'code';
-    public $incrementing = false;
-    protected $keyType = 'string';
 
     protected $fillable = [
         'tenant_id',
