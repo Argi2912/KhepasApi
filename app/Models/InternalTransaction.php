@@ -21,6 +21,7 @@ class InternalTransaction extends Model
         'transaction_date',
         'dueño',
         'person_name',
+        'source_type',
         // Estos son los campos clave para la relación
         'entity_type',
         'entity_id'

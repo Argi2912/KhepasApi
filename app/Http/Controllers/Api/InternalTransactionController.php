@@ -4,8 +4,13 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\InternalTransaction;
+use App\Models\Account;
+use App\Models\Investor;
+use App\Models\Provider;
 use App\Services\TransactionService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class InternalTransactionController extends Controller
 {
@@ -18,75 +23,117 @@ class InternalTransactionController extends Controller
 
     public function index(Request $request)
     {
-        $request->validate([
-            'account_id' => 'nullable|exists:accounts,id',
-            'type'       => 'nullable|in:income,expense',
-            'start_date' => 'nullable|date',
-            'end_date'   => 'nullable|date',
-        ]);
-
-        // ✅ CAMBIO 1: Agregamos 'entity' aquí. 
-        // Esto hace que Laravel le envíe al Frontend quién es la persona (Cliente, Empleado, etc.)
         $query = InternalTransaction::query()
             ->with(['user:id,name', 'account:id,name,currency_code', 'entity']); 
 
         $query->when($request->account_id, fn($q, $id) => $q->where('account_id', $id));
         $query->when($request->type, fn($q, $type) => $q->where('type', $type));
-        $query->when($request->start_date, fn($q, $d) => $q->whereDate('transaction_date', '>=', $d));
-        $query->when($request->end_date, fn($q, $d) => $q->whereDate('transaction_date', '<=', $d));
-
+        
         return $query->latest('transaction_date')->paginate(15);
     }
 
     public function store(Request $request)
     {
+        // 1. VALIDACIÓN
         $validated = $request->validate([
-            'account_id'       => 'required|exists:accounts,id',
-            'user_id'          => 'required|exists:users,id',
+            // CAMBIO: Lo hacemos 'nullable' (opcional). 
+            // Si no viene, asumiremos que es 'account' más abajo.
+            'source_type'      => 'nullable|in:account,investor,provider', 
+            
+            'account_id'       => 'required', 
+            'user_id'          => 'required',
             'type'             => 'required|in:income,expense',
-            'category'         => 'required|string|max:100',
             'amount'           => 'required|numeric|min:0.01',
-            'description'      => 'nullable|string|max:500',
+            'category'         => 'required',
             'transaction_date' => 'nullable|date',
-            'dueño'            => 'nullable|string|max:255',
-            'person_name'      => 'nullable|string|max:255',
-
-            // ✅ CAMBIO 2: Agregamos estos dos campos.
-            // Sin esto, Laravel ignora la relación y no guarda quién es el cliente en la base de datos.
-            'entity_type'      => 'nullable|string|max:255',
+            'entity_type'      => 'nullable|string',
             'entity_id'        => 'nullable|integer',
+            'description'      => 'nullable',
+            'dueño'            => 'nullable',
+            'person_name'      => 'nullable',
         ]);
 
+        // 2. VALORES POR DEFECTO (Aquí está la magia)
+        // Si no envías source_type, asumimos automáticamente que es 'account' (Tu Banco)
+        $sourceType = $validated['source_type'] ?? 'account';
+        
+        $amount     = (float) $validated['amount'];
+        $sourceId   = $validated['account_id'];
+        $type       = $validated['type']; 
+
+        // Rellenamos el array validado con el valor por defecto para que el Servicio lo entienda
+        $validated['source_type'] = $sourceType; 
+
+        // 3. VALIDACIÓN DE FONDOS (Solo para cuando sacas dinero)
+        if ($type === 'expense') {
+            
+            // CASO: Cuentas Bancarias (Por defecto)
+            if ($sourceType === 'account') {
+                $account = Account::find($sourceId);
+                
+                if (!$account) {
+                    return response()->json(['message' => 'La cuenta no existe.'], 422);
+                }
+
+                // Aquí validamos que tengas dinero real en el banco
+                if ($account->balance < $amount) {
+                    return response()->json([
+                        'message' => "⛔ SALDO INSUFICIENTE. La cuenta {$account->name} solo tiene: " . number_format($account->balance, 2)
+                    ], 422);
+                }
+            }
+            // (Mantenemos la lógica de Inversionistas/Proveedores oculta pero funcional por si acaso)
+            elseif ($sourceType === 'investor') {
+                $investor = Investor::find($sourceId);
+                if ($investor && $investor->available_balance < $amount) {
+                     return response()->json(['message' => "Saldo insuficiente (Inversionista)."], 422);
+                }
+            }
+            elseif ($sourceType === 'provider') {
+                $provider = Provider::find($sourceId);
+                if ($provider && $provider->available_balance < $amount) {
+                     return response()->json(['message' => "Saldo insuficiente (Proveedor)."], 422);
+                }
+            }
+        }
+
+        // 4. PROCESAR
         try {
-            $transaction = $this->transactionService->createInternalTransaction($validated);
-            return response()->json($transaction, 201);
+            return DB::transaction(function () use ($validated, $amount, $sourceType, $sourceId, $type) {
+                
+                // Si es Banco, actualizamos saldo físico
+                if ($sourceType === 'account') {
+                    if ($type === 'expense') {
+                        Account::where('id', $sourceId)->decrement('balance', $amount);
+                    } else {
+                        Account::where('id', $sourceId)->increment('balance', $amount);
+                    }
+                }
+
+                // Si transfieres a otra cuenta tuya (Destino)
+                $destType = $validated['entity_type'] ?? null;
+                $destId = $validated['entity_id'] ?? null;
+
+                if ($type === 'expense' && $destType === 'App\Models\Account') {
+                     Account::where('id', $destId)->increment('balance', $amount);
+                }
+
+                // Guardar Historial
+                $transaction = $this->transactionService->createInternalTransaction($validated);
+
+                return response()->json($transaction, 201);
+            });
+
         } catch (\Exception $e) {
-            return response()->json(['message' => $e->getMessage()], 400);
+            Log::error("Error Transaction: " . $e->getMessage());
+            return response()->json(['message' => $e->getMessage()], 500);
         }
     }
 
-    // 🚨 MÉTODO SHOW BLINDADO (Se mantiene igual, solo agregamos una línea)
     public function show($id)
     {
-        $tx = InternalTransaction::withoutGlobalScopes()->find($id);
-
-        if (!$tx) {
-            return response()->json(['message' => 'Transacción no encontrada'], 404);
-        }
-
-        if ($tx->tenant_id != auth()->user()->tenant_id) {
-            return response()->json(['message' => 'No autorizado'], 403);
-        }
-
-        $user = \App\Models\User::withoutGlobalScopes()->find($tx->user_id);
-        $account = \App\Models\Account::withoutGlobalScopes()->find($tx->account_id);
-
-        // ✅ CAMBIO 3: Cargamos la entidad también en el detalle individual
-        $tx->load('entity');
-
-        $tx->setRelation('user', $user);
-        $tx->setRelation('account', $account);
-
+        $tx = InternalTransaction::withoutGlobalScopes()->with('entity')->find($id);
+        if (!$tx) return response()->json(['message' => 'No encontrado'], 404);
         return response()->json($tx);
     }
 }

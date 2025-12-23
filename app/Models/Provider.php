@@ -3,12 +3,13 @@
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
-use App\Models\Traits\Filterable; // <-- 1. IMPORTAR TRAIT
+use App\Models\Traits\Filterable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\MorphMany; // <--- NUEVO: Importar MorphMany
-use Illuminate\Database\Eloquent\Builder; // <-- 2. IMPORTAR BUILDER
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Database\Eloquent\Builder;
+use App\Models\InternalTransaction; // <--- 1. IMPORTANTE: Agregar esto
 
 class Provider extends Model
 {
@@ -24,6 +25,9 @@ class Provider extends Model
         'email',
         'phone',
     ];
+
+    // 2. AGREGAMOS LOS ATTRIBUTES PARA QUE VUE LOS RECIBA
+    protected $appends = ['current_balance', 'available_balance'];
 
     /**
      * @return \Illuminate\Database\Eloquent\Relations\HasMany
@@ -42,7 +46,7 @@ class Provider extends Model
     }
 
     /**
-     * Relación con el libro contable (Historial de saldos/deudas).
+     * Relación con el libro contable (Cuentas por Pagar).
      * @return \Illuminate\Database\Eloquent\Relations\MorphMany
      */
     public function ledgerEntries(): MorphMany
@@ -50,29 +54,58 @@ class Provider extends Model
         return $this->morphMany(LedgerEntry::class, 'entity');
     }
 
-    /**
-     * Atributo virtual para obtener el saldo disponible actual.
-     * Uso: $provider->available_balance
-     * @return float
-     */
- public function getAvailableBalanceAttribute()
+    // 3. NUEVA RELACIÓN: Historial de movimientos (Ingresos y Retiros)
+    public function transactions()
     {
-        // Usamos la colección en memoria para asegurar que se usen los valores frescos
-        // o una consulta directa que reste las columnas.
-        
-        return $this->ledgerEntries()
-            ->where('type', 'payable') // Solo lo que se le debe al proveedor
-            ->get() // Traemos los registros
-            ->sum(function ($entry) {
-                // Usamos el cálculo: Monto Original - Monto Pagado
-                return $entry->original_amount - $entry->paid_amount;
-            });
+        return $this->hasMany(InternalTransaction::class, 'account_id');
     }
+
+    // 4. SALDO BASE (Lo que está en Cuentas por Pagar)
+    // Este monto se mantiene FIJO aunque muevas el dinero a tus bancos.
+    public function getCurrentBalanceAttribute()
+    {
+        // Sumamos lo que dice el Ledger (Cuentas por Pagar)
+        $ledgerSum = $this->ledgerEntries()
+            ->where('type', 'payable')
+            ->sum('original_amount');
+
+        // (Fallback) Si es 0, miramos si hay ingresos manuales en el historial
+        // por si acaso es un proveedor viejo o con datos migrados.
+        if ($ledgerSum == 0) {
+            return $this->transactions()
+                ->where('type', 'income')
+                ->where(function($q) {
+                    $q->where('source_type', 'provider')->orWhere('source_type', 'account');
+                })
+                ->sum('amount');
+        }
+
+        return $ledgerSum;
+    }
+
+    // 5. DISPONIBLE PARA MOVER (Liquidez Real)
+    // Fórmula: (Saldo Base) - (Total Retirado/Transferido)
+    public function getAvailableBalanceAttribute()
+    {
+        // A. Obtenemos el Saldo Base (Deuda Total)
+        $totalIngresos = $this->current_balance;
+
+        // B. Sumamos todo lo que has SACADO (Transferencias a tus cuentas)
+        // Buscamos transacciones de tipo 'expense' (gastos/salidas)
+        $totalRetiros = $this->transactions()
+            ->where('type', 'expense')
+            ->where(function($q) {
+                // Buscamos tanto con etiqueta correcta 'provider' como la vieja 'account'
+                $q->where('source_type', 'provider')->orWhere('source_type', 'account');
+            })
+            ->sum('amount');
+
+        // C. Resultado: Lo que tenías MENOS lo que sacaste
+        return $totalIngresos - $totalRetiros;
+    }
+
     /**
-     * Filtra por un término de búsqueda (nombre o persona de contacto).
-     * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @param  string  $term
-     * @return \Illuminate\Database\Eloquent\Builder
+     * Filtra por un término de búsqueda.
      */
     public function scopeSearch(Builder $query, $term): Builder
     {
