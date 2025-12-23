@@ -21,12 +21,13 @@ return new class extends Migration
             $table->foreignId('broker_id')->nullable()->constrained('brokers');
             $table->foreignId('provider_id')->nullable()->constrained('providers');
 
-            // 🚨 CORRECCIÓN: Usamos unsignedBigInteger en lugar de constrained()
-            // Esto permite crear la tabla aunque 'platforms' se cree un segundo después.
+            // ID Plataforma (sin restricción estricta para evitar errores de orden)
             $table->unsignedBigInteger('platform_id')->nullable()->comment('ID Plataforma');
 
             // --- Cuentas ---
-            $table->foreignId('from_account_id')->constrained('accounts');
+            // CORRECCIÓN 1: Ahora permite NULOS (para cuando paga un Inversionista)
+            $table->foreignId('from_account_id')->nullable()->constrained('accounts');
+            
             $table->foreignId('to_account_id')->constrained('accounts');
 
             // --- Datos Financieros ---
@@ -40,6 +41,13 @@ return new class extends Migration
             $table->decimal('commission_provider_amount', 14, 2)->default(0);
             $table->decimal('commission_admin_amount', 14, 2)->default(0);
             $table->decimal('commission_broker_amount', 14, 2)->default(0);
+
+            // --- NUEVOS CAMPOS (INVERSIONISTA) ---
+            // CORRECCIÓN 2: Agregamos los campos que faltaban
+            $table->string('capital_type')->default('own'); // 'own' o 'investor'
+            $table->foreignId('investor_id')->nullable()->constrained('investors')->onDelete('set null');
+            $table->decimal('investor_profit_pct', 8, 2)->default(0);
+            $table->decimal('investor_profit_amount', 14, 2)->default(0);
 
             // --- Trazabilidad ---
             $table->string('trader_info')->nullable();

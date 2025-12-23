@@ -3,14 +3,13 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Investor;
-use App\Services\TransactionService; // <--- 1. IMPORTAR SERVICIO
+use App\Services\TransactionService; 
 use Illuminate\Http\Request;
 
 class InvestorController extends Controller
 {
-    protected $transactionService; // <--- 2. PROPIEDAD
+    protected $transactionService; 
 
-    // 3. CONSTRUCTOR PARA INYECTAR EL SERVICIO
     public function __construct(TransactionService $transactionService)
     {
         $this->transactionService = $transactionService;
@@ -22,7 +21,8 @@ class InvestorController extends Controller
     public function index(Request $request)
     {
         $query = Investor::query()
-            ->select('id', 'name', 'alias', 'email', 'phone', 'is_active', 'created_at')
+            // ✅ CORRECCIÓN AQUÍ: Se agregó 'available_balance' a la lista
+            ->select('id', 'name', 'alias', 'email', 'phone', 'is_active', 'created_at', 'available_balance')
             ->where('is_active', true);
 
         // Opcional: permitir búsqueda
@@ -35,11 +35,12 @@ class InvestorController extends Controller
             });
         }
 
-        // 6. Paginar y Adjuntar Saldo (CAMBIO AQUÍ)
+        // 6. Paginar 
         $investors = $query->latest()->paginate(15);
 
         // Recorremos los resultados para agregar el saldo "al vuelo"
         $investors->getCollection()->transform(function ($investor) {
+            // Ahora esto funcionará porque 'available_balance' ya fue seleccionado arriba
             $investor->current_balance = $investor->available_balance;
             return $investor;
         });
@@ -49,7 +50,7 @@ class InvestorController extends Controller
 
     public function show(Investor $investor)
     {
-        // Adjuntar saldo antes de devolver (CAMBIO AQUÍ)
+        // Adjuntar saldo antes de devolver
         $investor->current_balance = $investor->available_balance;
 
         return response()->json($investor);
@@ -92,13 +93,12 @@ class InvestorController extends Controller
 
     public function destroy(Investor $investor)
     {
-        $investor->update(['is_active' => false]); // o delete() si prefieres borrado físico
-                                                   // $investor->delete();
+        $investor->update(['is_active' => false]); 
         return response()->json(['message' => 'Eliminado']);
     }
 
     /**
-     * NUEVO METODO: Agregar Capital/Saldo manualmente
+     * Agregar Capital/Saldo manualmente
      */
     public function addBalance(Request $request, Investor $investor)
     {
