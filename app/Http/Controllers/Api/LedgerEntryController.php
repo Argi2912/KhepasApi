@@ -3,8 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Account; // [IMPORTANTE] Importar el modelo Account
 use App\Models\CurrencyExchange;
-use App\Models\LedgerEntry; 
+use App\Models\LedgerEntry;
 use App\Services\TransactionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -18,54 +19,37 @@ class LedgerEntryController extends Controller
         $this->transactionService = $transactionService;
     }
 
-    /**
-     * Lista las deudas y compras pendientes.
-     */
     public function index(Request $request)
     {
         $query = LedgerEntry::query()
             ->with(['entity', 'transaction']);
 
-        // Filtro por tipo
         $query->when($request->type, fn($q, $t) => $q->where('type', $t));
-
-        // Filtro por estado
         $query->when($request->status, fn($q, $s) => $q->where('status', $s));
 
-        // Búsqueda inteligente
         $query->when($request->search, function ($q, $search) {
             $q->where(function ($q) use ($search) {
-                // 1. Buscar en descripción o referencia de transacción
                 $q->where('description', 'like', "%{$search}%")
                     ->orWhereHas('transaction', fn($q) => $q->where('number', 'like', "%{$search}%"))
-                    
-                    // 2. Buscar nombre en las tablas relacionadas
                     ->orWhereHasMorph('entity', [
-                        \App\Models\Employee::class, // <--- ¡AQUÍ FALTABA ESTE!
+                        \App\Models\Employee::class,
                         \App\Models\Broker::class,
                         \App\Models\Client::class,
                         \App\Models\Investor::class,
                         \App\Models\Provider::class,
-                        \App\Models\User::class, // Agregué User por si acaso usas usuarios directos
+                        \App\Models\User::class,
                     ], function ($q, $type) use ($search) {
                         $q->where('name', 'like', "%{$search}%");
-
-                        // Solo Investor tiene alias
                         if ($type === \App\Models\Investor::class) {
                             $q->orWhere('alias', 'like', "%{$search}%");
                         }
-                        
-                        // Opcional: Si tus tablas tienen email, también busca por ahí
-                        // $q->orWhere('email', 'like', "%{$search}%");
                     });
             });
         });
 
-        // Filtro por fechas
         $query->when($request->start_date, fn($q, $date) => $q->whereDate('created_at', '>=', $date));
         $query->when($request->end_date, fn($q, $date) => $q->whereDate('created_at', '<=', $date));
 
-        // Solo pendientes o parcialmente pagados por defecto
         if (! $request->boolean('include_paid')) {
             $query->whereIn('status', ['pending', 'partially_paid']);
         }
@@ -76,12 +60,13 @@ class LedgerEntryController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'description' => 'required|string|max:500',
-            'amount'      => 'required|numeric|min:0.01',
-            'type'        => 'required|in:payable,receivable',
-            'entity_type' => 'required|string',
-            'entity_id'   => 'required|integer|exists:' . class_basename($request->entity_type) . 's,id',
-            'due_date'    => 'nullable|date',
+            'description'   => 'required|string|max:500',
+            'amount'        => 'required|numeric|min:0.01',
+            'currency_code' => 'required|string|exists:currencies,code', // [CORRECCIÓN] Validar divisa
+            'type'          => 'required|in:payable,receivable',
+            'entity_type'   => 'required|string',
+            'entity_id'     => 'required|integer|exists:' . class_basename($request->entity_type) . 's,id',
+            'due_date'      => 'nullable|date',
         ]);
 
         $entry = LedgerEntry::create([
@@ -89,6 +74,7 @@ class LedgerEntryController extends Controller
             'description'     => $validated['description'],
             'amount'          => $validated['amount'],
             'original_amount' => $validated['amount'],
+            'currency_code'   => $validated['currency_code'], // [CORRECCIÓN] Guardar la divisa
             'type'            => $validated['type'],
             'entity_type'     => $validated['entity_type'],
             'entity_id'       => $validated['entity_id'],
@@ -98,6 +84,7 @@ class LedgerEntryController extends Controller
         return response()->json($entry->load('entity'), 201);
     }
 
+    // ... (El método summary se mantiene igual) ...
     public function summary()
     {
         // Total Por Pagar (Original)
@@ -140,6 +127,17 @@ class LedgerEntryController extends Controller
             'amount'      => 'required|numeric|min:0.01',
             'description' => 'nullable|string|max:500',
         ]);
+
+        // [NUEVO LOGICA] Validar compatibilidad de Divisas
+        // 1. Buscamos la cuenta
+        $account = Account::findOrFail($request->account_id);
+
+        // 2. Comparamos los códigos de moneda
+        if ($account->currency_code !== $ledgerEntry->currency_code) {
+            return response()->json([
+                'message' => "Error de Divisa: La deuda es en {$ledgerEntry->currency_code} pero intentas pagar con una cuenta en {$account->currency_code}."
+            ], 422); // 422 Unprocessable Entity
+        }
 
         $paymentAmount = $request->amount;
         $pending       = $ledgerEntry->original_amount - $ledgerEntry->paid_amount;
