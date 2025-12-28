@@ -42,12 +42,12 @@ class AccountController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'currency_code' => 'required|string|size:3',
+            'currency_code' => 'required|string|max:5',
             'balance' => 'required|numeric|min:0',
         ]);
-        
+
         $account = Account::create($validated);
-        
+
         return response()->json($account, 201);
     }
 
@@ -63,9 +63,9 @@ class AccountController extends Controller
             'currency_code' => 'sometimes|required|string|size:3',
             'balance' => 'sometimes|required|numeric|min:0', // Usar un endpoint dedicado para ajustar balance es mejor
         ]);
-        
+
         $account->update($validated);
-        
+
         return response()->json($account);
     }
 

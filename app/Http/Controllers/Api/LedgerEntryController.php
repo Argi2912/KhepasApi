@@ -50,9 +50,9 @@ class LedgerEntryController extends Controller
         $query->when($request->start_date, fn($q, $date) => $q->whereDate('created_at', '>=', $date));
         $query->when($request->end_date, fn($q, $date) => $q->whereDate('created_at', '<=', $date));
 
-        if (! $request->boolean('include_paid')) {
+        /* if (! $request->boolean('include_paid')) {
             $query->whereIn('status', ['pending', 'partially_paid']);
-        }
+        } */
 
         return $query->latest()->paginate(15)->withQueryString();
     }
