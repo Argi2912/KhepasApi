@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -29,16 +30,16 @@ class CurrencyController extends Controller
 
         $validated = $request->validate([
             'code' => [
-                'required', 
-                'string', 
-                'max:5', 
+                'required',
+                'string',
+                'max:5',
                 Rule::unique('currencies')->where(function ($query) use ($tenantId) {
                     return $query->where('tenant_id', $tenantId);
                 }),
             ],
             'name' => [
-                'required', 
-                'string', 
+                'required',
+                'string',
                 'max:50',
                 Rule::unique('currencies')->where(function ($query) use ($tenantId) {
                     return $query->where('tenant_id', $tenantId);
@@ -64,10 +65,18 @@ class CurrencyController extends Controller
         $tenantId = Auth::user()->tenant_id;
 
         $validated = $request->validate([
+            'code' => [
+                'required',
+                'string',
+                'max:5',
+                Rule::unique('currencies')->where(function ($query) use ($tenantId) {
+                    return $query->where('tenant_id', $tenantId);
+                }),
+            ],
             'name' => [
-                'required', 
-                'string', 
-                'max:50', 
+                'required',
+                'string',
+                'max:50',
                 // Ignoramos la divisa actual ($currency->id) pero validamos en el tenant
                 Rule::unique('currencies')->ignore($currency->id)->where(function ($query) use ($tenantId) {
                     return $query->where('tenant_id', $tenantId);

@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
@@ -54,7 +55,7 @@ class StatisticsController extends Controller
 
         // INGRESOS
         $internalIncome = InternalTransaction::selectRaw("DATE_FORMAT(transaction_date, ?) as period, SUM(amount) as total", [$groupFormat])
-            ->where('type', InternalTransaction::TYPE_INCOME)
+            ->where('type', 'income') // CORREGIDO: Se usa string directo
             ->whereBetween('transaction_date', [$startDate, $endDate])
             ->groupBy('period')
             ->pluck('total', 'period')
@@ -69,7 +70,7 @@ class StatisticsController extends Controller
 
         // GASTOS
         $expenses = InternalTransaction::selectRaw("DATE_FORMAT(transaction_date, ?) as period, SUM(amount) as total", [$groupFormat])
-            ->where('type', InternalTransaction::TYPE_EXPENSE)
+            ->where('type', 'expense') // CORREGIDO: Se usa string directo
             ->whereBetween('transaction_date', [$startDate, $endDate])
             ->groupBy('period')
             ->pluck('total', 'period')
@@ -114,7 +115,7 @@ class StatisticsController extends Controller
         // Gastos por categoría (solo mes/año)
         $expensesByCategory = in_array($period, ['month', 'year'])
             ? InternalTransaction::selectRaw('category, SUM(amount) as total')
-            ->where('type', InternalTransaction::TYPE_EXPENSE)
+            ->where('type', 'expense') // CORREGIDO: Se usa string directo
             ->whereBetween('transaction_date', [$startDate, $endDate])
             ->groupBy('category')
             ->orderByDesc('total')
@@ -191,34 +192,35 @@ class StatisticsController extends Controller
         $reports = [];
 
         foreach ($entities as $entity) {
-            // Consulta optimizada: Sumar directamente en la DB en lugar de traer los registros y sumar en PHP
-            // Usamos los campos correctos de CurrencyExchange
+            // Consulta optimizada
+            // 'total_net_profit' ahora acumula 'amount_received' (Entrada Total de Dinero)
             $stats = CurrencyExchange::where($relationField, $entity->id)
                 ->completed() // Scope: status = 'completed'
                 ->whereBetween('created_at', [$startDate, $endDate])
                 ->selectRaw('
                     COUNT(*) as total_transactions,
                     SUM(commission_total_amount) as total_gross_profit,
-                    SUM(commission_admin_amount) as total_net_profit,
+                    SUM(amount_received) as total_net_profit,
                     SUM(amount_sent + amount_received) as total_volume_moved
                 ')
                 ->first();
 
-            // Si no hay movimientos, saltamos o ponemos ceros (opcional)
+            // Si no hay movimientos, saltamos
             if (! $stats || $stats->total_transactions == 0) {
-                continue; // O puedes agregarlo con ceros si prefieres mostrar todos
+                continue;
             }
 
             // Mapeo de datos para el reporte
             $reports[] = [
                 'entity_id'          => $entity->id,
-                'entity_name'        => $entity->name ?? $entity->alias ?? 'Sin Nombre', // Ajustar según tus modelos
+                'entity_name'        => $entity->name ?? $entity->alias ?? 'Sin Nombre',
 
                 // Ganancia generada (Bruta de la operación)
                 'total_profit'       => round($stats->total_gross_profit ?? 0, 2),
 
-                // Ganancia Neta (Lo que le quedó a la empresa "Admin")
-                'total_admin_profit' => round($stats->total_net_profit ?? 0, 2),
+                // Ganancia Neta (Ahora mapeada a Entrada Total de Dinero)
+                // Usamos 'total_paid_to_admin' porque es la clave que el Frontend espera para la columna "Ganancia Neta"
+                'total_paid_to_admin' => round($stats->total_net_profit ?? 0, 2),
 
                 // Volumen total (Suma de lo enviado + recibido)
                 'total_moved'        => round($stats->total_volume_moved ?? 0, 2),
@@ -236,7 +238,7 @@ class StatisticsController extends Controller
         ];
     }
 
-    // Métodos públicos para las rutas (Asegúrate que coinciden con api.php)
+    // Métodos públicos para las rutas
 
     public function getClientReport(Request $request)
     {
@@ -257,50 +259,46 @@ class StatisticsController extends Controller
     {
         return response()->json($this->getEntityReport('broker', $request));
     }
+
     public function getInvestorReport(\Illuminate\Http\Request $request)
-{
-    // 1. Cargamos el Inversionista con su Cuenta (Saldo actual) y sus Entradas (Historial)
-    $investors = \App\Models\Investor::with(['account', 'ledgerEntries' => function ($q) {
-        $q->where('type', 'payable');
-    }])->get();
+    {
+        // 1. Cargamos el Inversionista con su Cuenta (Saldo actual) y sus Entradas (Historial)
+        $investors = \App\Models\Investor::with(['account', 'ledgerEntries' => function ($q) {
+            $q->where('type', 'payable');
+        }])->get();
 
-    $now = \Carbon\Carbon::now();
+        $now = \Carbon\Carbon::now();
 
-    // 2. Preparamos los datos EXACTOS para EntityReport
-    $data = $investors->map(function ($investor) use ($now) {
-        
-        // --- LÓGICA DE RECUPERACIÓN DE DINERO ---
-        // Opción A: Saldo en la tabla 'accounts' (Lo más preciso)
-        $capital = $investor->account ? $investor->account->balance : 0;
+        // 2. Preparamos los datos EXACTOS para EntityReport
+        $data = $investors->map(function ($investor) use ($now) {
 
-        // Opción B: Si es 0, sumamos todo lo que ha entrado al Ledger (Respaldo)
-        if ($capital == 0) {
-            $capital = $investor->ledgerEntries->sum('original_amount');
-        }
+            // --- LÓGICA DE RECUPERACIÓN DE DINERO ---
+            // Opción A: Saldo en la tabla 'accounts' (Lo más preciso)
+            $capital = $investor->account ? $investor->account->balance : 0;
 
-        // Cálculo de Interés
-        $start = \Carbon\Carbon::parse($investor->created_at);
-        $months = $start->diffInMonths($now);
-        $rate = $investor->interest_rate / 100;
-        $totalDebt = $capital * pow((1 + $rate), $months);
+            // Opción B: Si es 0, sumamos todo lo que ha entrado al Ledger (Respaldo)
+            if ($capital == 0) {
+                $capital = $investor->ledgerEntries->sum('original_amount');
+            }
 
-        return [
-            // Identificadores (Ocultos o para acciones)
-            'entity_id'   => $investor->id,
-            'entity_name' => $investor->name, // La columna principal
+            // Cálculo de Interés
+            $start = \Carbon\Carbon::parse($investor->created_at);
+            $months = $start->diffInMonths($now);
+            $rate = $investor->interest_rate / 100;
+            $totalDebt = $capital * pow((1 + $rate), $months);
 
-            // --- COLUMNAS VISIBLES (Las llaves definen el Título en la Tabla) ---
-            // Usamos nombres claros para que EntityReport los muestre bien
-            'capital_invested' => round($capital, 2),        // Capital Invertido
-            'monthly_rate'     => $investor->interest_rate . '%', // Tasa Mensual
-            'payout_day'       => 'Día ' . $investor->payout_day, // Día de Corte
-            'total_accumulated'=> round($totalDebt, 2),      // Total Acumulado
-        ];
-    });
+            return [
+                'entity_id'   => $investor->id,
+                'entity_name' => $investor->name,
+                'capital_invested' => round($capital, 2),
+                'monthly_rate'     => $investor->interest_rate . '%',
+                'payout_day'       => 'Día ' . $investor->payout_day,
+                'total_accumulated' => round($totalDebt, 2),
+            ];
+        });
 
-    // Retornamos en el formato que EntityReport espera (dentro de 'reports')
-    return response()->json([
-        'reports' => $data
-    ]);
-}
+        return response()->json([
+            'reports' => $data
+        ]);
+    }
 }
