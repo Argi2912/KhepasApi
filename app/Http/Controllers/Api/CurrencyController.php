@@ -33,6 +33,7 @@ class CurrencyController extends Controller
                 'required',
                 'string',
                 'max:5',
+                // Validación única por Tenant para creación
                 Rule::unique('currencies')->where(function ($query) use ($tenantId) {
                     return $query->where('tenant_id', $tenantId);
                 }),
@@ -41,6 +42,7 @@ class CurrencyController extends Controller
                 'required',
                 'string',
                 'max:50',
+                // Validación única por Tenant para creación
                 Rule::unique('currencies')->where(function ($query) use ($tenantId) {
                     return $query->where('tenant_id', $tenantId);
                 }),
@@ -69,18 +71,23 @@ class CurrencyController extends Controller
                 'required',
                 'string',
                 'max:5',
-                Rule::unique('currencies')->where(function ($query) use ($tenantId) {
-                    return $query->where('tenant_id', $tenantId);
-                }),
+                // CORRECCIÓN: Se agrega ignore($currency->id) para que no falle al guardar el mismo código
+                Rule::unique('currencies')
+                    ->ignore($currency->id)
+                    ->where(function ($query) use ($tenantId) {
+                        return $query->where('tenant_id', $tenantId);
+                    }),
             ],
             'name' => [
                 'required',
                 'string',
                 'max:50',
                 // Ignoramos la divisa actual ($currency->id) pero validamos en el tenant
-                Rule::unique('currencies')->ignore($currency->id)->where(function ($query) use ($tenantId) {
-                    return $query->where('tenant_id', $tenantId);
-                }),
+                Rule::unique('currencies')
+                    ->ignore($currency->id)
+                    ->where(function ($query) use ($tenantId) {
+                        return $query->where('tenant_id', $tenantId);
+                    }),
             ],
         ]);
 
