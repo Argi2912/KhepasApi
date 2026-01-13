@@ -97,9 +97,17 @@ class TenantController extends Controller
         return response()->json($tenant);
     }
 
-    public function destroy(Tenant $tenant)
+    public function destroy($id)
     {
+        $tenant = Tenant::findOrFail($id);
+
+        // Opcional: Evitar borrar el tenant principal o de demostración
+        if ($tenant->id === 1 || $tenant->domain === 'demo') {
+            return response()->json(['message' => 'No puedes eliminar el tenant principal/demo.'], 403);
+        }
+
         $tenant->delete();
+
         return response()->noContent();
     }
 
