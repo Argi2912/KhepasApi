@@ -11,7 +11,7 @@ class AccountController extends Controller
     public function index(Request $request)
     {
         $request->validate([
-            'currency_code' => 'nullable|string|size:3',
+            'currency_code' => 'nullable|string|size:5',
             'start_date' => 'nullable|date_format:Y-m-d',
             'end_date' => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
             // 'search' => 'nullable|string|max:100' // <-- Si añades scopeSearch
@@ -60,7 +60,7 @@ class AccountController extends Controller
     {
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
-            'currency_code' => 'sometimes|required|string|size:3',
+            'currency_code' => 'sometimes|required|string|size:5',
             'balance' => 'sometimes|required|numeric|min:0', // Usar un endpoint dedicado para ajustar balance es mejor
         ]);
 

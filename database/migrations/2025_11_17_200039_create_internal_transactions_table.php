@@ -13,9 +13,17 @@ return new class extends Migration
     {
         Schema::create('internal_transactions', function (Blueprint $table) {
             $table->id();
+
+            // Tenant ya tenía cascade, perfecto.
             $table->foreignId('tenant_id')->constrained('tenants')->onDelete('cascade');
-            $table->foreignId('user_id')->constrained('users');
-            $table->foreignId('account_id')->constrained('accounts'); // Cuenta principal
+            
+            // CORRECCIÓN 1: Agregado onDelete('cascade')
+            // Permite borrar el usuario sin que las transacciones bloqueen la operación
+            $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
+            
+            // CORRECCIÓN 2: Agregado onDelete('cascade')
+            // Permite borrar la cuenta bancaria sin errores de integridad
+            $table->foreignId('account_id')->constrained('accounts')->onDelete('cascade'); 
 
             $table->enum('type', ['income', 'expense', 'info']); // Agregué 'info' por si acaso (para interés compuesto)
             $table->string('category')->nullable();

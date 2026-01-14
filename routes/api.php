@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AccountController;
 
+
 /*
 |--------------------------------------------------------------------------
 | Importación de Controladores
@@ -53,7 +54,6 @@ Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'supe
     Route::get('/stats', [TenantController::class, 'dashboardStats']);
     Route::apiResource('tenants', TenantController::class);
     Route::patch('/tenants/{tenant}/toggle', [TenantController::class, 'toggleStatus']);
-    //Route::post('tenants/{tenant}/users', [SuperadminTenantUserController::class, 'store']);
 
     Route::get('/logs', [ActivityLogController::class, 'index']);
 });
@@ -80,7 +80,15 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::get('statistics/providers', [StatisticsController::class, 'getProviderReport'])
         ->middleware('permission:view_statistics');
 
+    // REPORTES (JSON y DESCARGAS)
+    // Reportes
+    Route::get('/reports/data', [App\Http\Controllers\Api\ReportController::class, 'getReportData']); // Nueva ruta para tablas
+    Route::get('/reports/download', [App\Http\Controllers\Api\ReportController::class, 'download']);
     Route::get('/reports/profit-matrix', [App\Http\Controllers\Api\ReportController::class, 'profitMatrix']);
+
+    // [NUEVO] Ruta única para descargar cualquier reporte (Excel/PDF)
+    Route::get('/reports/download', [App\Http\Controllers\Api\ReportController::class, 'download']);
+
 
     // Opcional: Agrega las rutas para el resto de los reportes para ser consistentes
     Route::get('statistics/clients', [StatisticsController::class, 'getClientReport'])
@@ -172,8 +180,6 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::post('investors/{investor}/balance', [InvestorController::class, 'addBalance']);
 
     Route::apiResource('investors', InvestorController::class);
-
-    // [BORRADO] Aquí tenías la línea duplicada que daba error. Ya no hace falta.
 
     // --- G. Gestión de Usuarios ---
     Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])
