@@ -4,28 +4,24 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
-use Illuminate\Http\Request; // Reemplaza con Form Requests
+use Illuminate\Http\Request;
 
 class AccountController extends Controller
 {
     public function index(Request $request)
     {
         $request->validate([
-            'currency_code' => 'nullable|string|size:5',
+            // CAMBIO: De 'size:3' a 'max:5' para que el filtro sea flexible
+            'currency_code' => 'nullable|string|max:5', 
             'start_date' => 'nullable|date_format:Y-m-d',
             'end_date' => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
-            // 'search' => 'nullable|string|max:100' // <-- Si añades scopeSearch
         ]);
 
         $query = Account::query();
 
         $query->when($request->currency_code, function ($q, $code) {
-            return $q->currencyCode($code); // Llama al scopeCurrencyCode()
+            return $q->currencyCode($code);
         });
-
-        // $query->when($request->search, function ($q, $term) {
-        //     return $q->search($term); 
-        // });
 
         $query->when($request->start_date, function ($q, $date) {
             return $q->fromDate($date);
@@ -42,7 +38,8 @@ class AccountController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'currency_code' => 'required|string|max:5',
+            // ESTE YA ESTABA BIEN: max:5 permite de 1 a 5 caracteres
+            'currency_code' => 'required|string|max:5', 
             'balance' => 'required|numeric|min:0',
         ]);
 
@@ -60,8 +57,9 @@ class AccountController extends Controller
     {
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
-            'currency_code' => 'sometimes|required|string|size:5',
-            'balance' => 'sometimes|required|numeric|min:0', // Usar un endpoint dedicado para ajustar balance es mejor
+            // CAMBIO: Quitamos 'size:3' y ponemos 'max:5'
+            'currency_code' => 'sometimes|required|string|max:5', 
+            'balance' => 'sometimes|required|numeric|min:0',
         ]);
 
         $account->update($validated);

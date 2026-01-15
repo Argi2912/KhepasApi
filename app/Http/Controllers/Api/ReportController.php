@@ -6,12 +6,12 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
-// 1. LIBRERÍAS DE EXPORTACIÓN
+// Librerías de exportación
 use Maatwebsite\Excel\Facades\Excel;
 use Barryvdh\DomPDF\Facade\Pdf;
 use App\Exports\UniversalExport; 
 
-// 2. TUS MODELOS
+// Modelos
 use App\Models\CurrencyExchange;
 use App\Models\InternalTransaction;
 use App\Models\LedgerEntry;
@@ -19,7 +19,7 @@ use App\Models\LedgerEntry;
 class ReportController extends Controller
 {
     // =========================================================================
-    //  1. MATRIZ DE RENTABILIDAD (Tu lógica original intacta)
+    //  1. MATRIZ DE RENTABILIDAD
     // =========================================================================
     public function profitMatrix(Request $request)
     {
@@ -103,7 +103,7 @@ class ReportController extends Controller
     }
 
     // =========================================================================
-    //  2. DESCARGA DE REPORTES (Esta es la función que te faltaba)
+    //  2. DESCARGA DE REPORTES
     // =========================================================================
     public function download(Request $request)
     {
@@ -114,13 +114,13 @@ class ReportController extends Controller
         $headers = [];
         $title = "Reporte del Sistema";
 
-        // --- SELECCIÓN DE DATOS ---
         switch ($type) {
             case 'operations':
                 $title = "Historial de Operaciones";
                 $headers = ['Ref', 'Fecha', 'Cliente', 'Tipo', 'Envía', 'Recibe', 'Tasa', 'Estado'];
                 
-                $query = CurrencyExchange::with(['client', 'user'])->orderBy('created_at', 'desc');
+                // CORRECCIÓN AQUÍ: Usamos 'adminUser' en lugar de 'user'
+                $query = CurrencyExchange::with(['client', 'adminUser'])->orderBy('created_at', 'desc');
                 
                 if ($request->client_id) $query->where('client_id', $request->client_id);
                 if ($request->broker_id) $query->where('broker_id', $request->broker_id);
@@ -182,9 +182,7 @@ class ReportController extends Controller
                 $data = collect([]);
         }
 
-        // --- GENERACIÓN DEL ARCHIVO ---
         if ($format === 'excel') {
-            // Genera XLSX (Compatible con Google Sheets)
             return Excel::download(new UniversalExport($data, $headers), "{$type}_" . date('Ymd') . ".xlsx");
         } 
         
