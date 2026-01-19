@@ -36,7 +36,7 @@ return new class extends Migration
                 $table->decimal('paid_amount', 14, 2)->default(0);
                 $table->decimal('pending_amount', 14, 2);
 
-                $table->string('currency_code', 3)->default('USD');
+                $table->string('currency_code', 19)->default('USD');
                 $table->text('description')->nullable();
                 $table->date('due_date')->nullable();
 
