@@ -18,14 +18,18 @@ use Illuminate\Support\Facades\DB;
 class TransactionService
 {
     // =========================================================================
-    // 0. GENERADOR DE SECUENCIALES (CORREGIDO)
+    // 0. GENERADOR DE SECUENCIALES (CORREGIDO Y BLINDADO)
     // =========================================================================
     private function generateSequentialNumber(string $modelClass, string $prefix): string
     {
-        // 🚨 CORRECCIÓN CRÍTICA:
-        // Agregamos `withTrashed()` para que cuente también los registros eliminados.
-        // Esto evita que intente reutilizar el ID de una transacción borrada.
-        $latest = $modelClass::withTrashed()->latest('id')->first();
+        // 1. withoutGlobalScopes(): Ignora el filtro de "Tenant/Empresa". 
+        //    Busca en TODA la tabla para encontrar el verdadero último ID global.
+        // 2. withTrashed(): Incluye los eliminados para no repetir IDs viejos.
+        
+        $latest = $modelClass::withoutGlobalScopes()
+            ->withTrashed()
+            ->latest('id')
+            ->first();
         
         $nextId = $latest ? $latest->id + 1 : 1;
         return $prefix . str_pad($nextId, 5, '0', STR_PAD_LEFT);
