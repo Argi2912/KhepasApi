@@ -17,15 +17,22 @@ use Illuminate\Support\Facades\DB;
 
 class TransactionService
 {
+    // =========================================================================
+    // 0. GENERADOR DE SECUENCIALES (CORREGIDO)
+    // =========================================================================
     private function generateSequentialNumber(string $modelClass, string $prefix): string
     {
-        $latest = $modelClass::latest('id')->first();
+        // 🚨 CORRECCIÓN CRÍTICA:
+        // Agregamos `withTrashed()` para que cuente también los registros eliminados.
+        // Esto evita que intente reutilizar el ID de una transacción borrada.
+        $latest = $modelClass::withTrashed()->latest('id')->first();
+        
         $nextId = $latest ? $latest->id + 1 : 1;
         return $prefix . str_pad($nextId, 5, '0', STR_PAD_LEFT);
     }
 
     // =========================================================================
-    // 1. GESTIÓN DE OPERACIONES DE CAMBIO (INTACTO)
+    // 1. GESTIÓN DE OPERACIONES DE CAMBIO (ACTUALIZADO: LOGICA PAID/DELIVERED)
     // =========================================================================
     public function createCurrencyExchange(array $data)
     {
@@ -39,40 +46,43 @@ class TransactionService
             $amountSent     = (float) $data['amount_sent'];
             $amountReceived = (float) $data['amount_received'];
 
-            // DETECCIÓN DE ESTADO
-            $statusRaw = $data['status'] ?? 'completed';
-            if (isset($data['delivered']) && !$data['delivered']) {
-                $statusRaw = 'waiting_payment';
-            }
-            $isPaidNow = ($statusRaw === 'completed');
+            // LÓGICA DE ESTADOS
+            // delivered (true) = Ya recibí los USD del cliente (o entregué el producto) -> Money In ocurre.
+            // paid (true)      = Ya pagué los VES al cliente -> Money Out ocurre.
+            $isDelivered = $data['delivered'] ?? true; 
+            $isPaid      = $data['paid'] ?? true;       
 
-            // Money Out
+            // --- 1. MONEY OUT (Salida de Dinero) ---
+            // Si es 'own' (Caja propia) y está PAGADO -> Descontar Saldo
             if ($capitalType === 'own') {
                 if (empty($data['from_account_id'])) throw new Exception("Se requiere cuenta origen.");
                 $fromAccount = Account::lockForUpdate()->findOrFail($data['from_account_id']);
-
-                if ($fromAccount->balance < $amountSent) {
-                    throw new Exception("Saldo insuficiente en {$fromAccount->name}.");
-                }
-
-                $fromAccount->decrement('balance', $amountSent);
                 $fromAccountId = $fromAccount->id;
 
-                InternalTransaction::create([
-                    'tenant_id' => $tenantId,
-                    'user_id' => $data['admin_user_id'],
-                    'account_id' => $fromAccount->id,
-                    'type' => 'expense',
-                    'category' => 'Intercambio Enviado',
-                    'amount' => $amountSent,
-                    'description' => "Salida Intercambio {$exchangeNumber}",
-                    'transaction_date' => now()
-                ]);
+                if ($isPaid) {
+                    if ($fromAccount->balance < $amountSent) {
+                        throw new Exception("Saldo insuficiente en {$fromAccount->name}.");
+                    }
+                    $fromAccount->decrement('balance', $amountSent);
+
+                    InternalTransaction::create([
+                        'tenant_id' => $tenantId,
+                        'user_id' => $data['admin_user_id'],
+                        'account_id' => $fromAccount->id,
+                        'type' => 'expense',
+                        'category' => 'Intercambio Enviado',
+                        'amount' => $amountSent,
+                        'description' => "Salida Intercambio {$exchangeNumber}",
+                        'transaction_date' => now()
+                    ]);
+                }
+                // Si NO está pagado (Por Pagar) -> No descontamos, el sistema debe registrar deuda más abajo
             }
 
-            // Money In
+            // --- 2. MONEY IN (Entrada de Dinero) ---
             $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
-            if ($isPaidNow) {
+            
+            if ($isDelivered) {
                 $toAccount->increment('balance', $amountReceived);
                 InternalTransaction::create([
                     'tenant_id' => $tenantId,
@@ -111,41 +121,58 @@ class TransactionService
                 'investor_profit_pct' => $data['investor_profit_pct'] ?? 0,
                 'investor_profit_amount' => $data['investor_profit_amount'] ?? 0,
                 'reference_id' => $data['reference_id'] ?? null,
-                'status' => $statusRaw
+                'status' => $data['status'] ?? 'completed'
             ]);
 
-            // COMISIONES
-            $currencyOut = $fromAccount ? $fromAccount->currency_code : $toAccount->currency_code;
-            $currencyIn  = $toAccount->currency_code;
+            // --- 3. REGISTRO DE DEUDAS (LEDGER) ---
+            // Monedas de referencia
+            $currencySent = $fromAccount ? $fromAccount->currency_code : '???';
+            $currencyReceived = $toAccount->currency_code;
 
-            if (($p = (float)($data['commission_provider_amount'] ?? 0)) > 0 && !empty($data['provider_id']))
-                $this->createLedgerDebt($exchange, $p, $currencyOut, 'payable', $data['provider_id'], Provider::class, "Comisión Proveedor");
-
-            if (($b = (float)($data['commission_broker_amount'] ?? 0)) > 0 && !empty($data['broker_id']))
-                $this->createLedgerDebt($exchange, $b, $currencyOut, 'payable', $data['broker_id'], Broker::class, "Comisión Corredor");
-
-            if (($pl = (float)($data['commission_admin_amount'] ?? 0)) > 0 && !empty($data['platform_id']))
-                $this->createLedgerDebt($exchange, $pl, $currencyOut, 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
-
-            if (($c = (float)($data['commission_charged_amount'] ?? 0)) > 0 && !empty($exchange->client_id)) {
-                $status = ($data['is_commission_deferred'] ?? false) || !$isPaidNow ? 'pending' : 'paid';
-                $this->createLedgerDebt($exchange, $c, $currencyIn, 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $status);
+            // A) POR PAGAR (Si desmarcaste "Pagado Inmediatamente")
+            // Le debemos al Cliente el monto que íbamos a enviar (amount_sent)
+            if (!$isPaid && $capitalType === 'own' && !empty($exchange->client_id)) {
+                $this->createLedgerDebt(
+                    $exchange, 
+                    $amountSent, 
+                    $currencySent, 
+                    'payable', // Deuda (Pasivo)
+                    $exchange->client_id, 
+                    Client::class, 
+                    "Por Pagar al Cliente (Op. {$exchangeNumber})", 
+                    'pending'
+                );
             }
 
-            // Siempre registra en Ledger, sea deuda o historial pagado
-            if (!empty($exchange->client_id) && $amountReceived > 0) {
-                $ledgerStatus = $isPaidNow ? 'paid' : 'pending';
-
+            // B) POR COBRAR (Si desmarcaste "Entregar Inmediatamente")
+            // El cliente nos debe el monto que íbamos a recibir (amount_received)
+            if (!$isDelivered && !empty($exchange->client_id)) {
                 $this->createLedgerDebt(
-                    $exchange,
-                    $amountReceived,
-                    $currencyIn,
-                    'receivable',
-                    $exchange->client_id,
-                    Client::class,
-                    "Operación de Cambio #{$exchange->number}",
-                    $ledgerStatus
+                    $exchange, 
+                    $amountReceived, 
+                    $currencyReceived, 
+                    'receivable', // Cobro (Activo)
+                    $exchange->client_id, 
+                    Client::class, 
+                    "Por Cobrar al Cliente (Op. {$exchangeNumber})", 
+                    'pending'
                 );
+            }
+
+            // C) COMISIONES Y TERCEROS
+            if (($p = (float)($data['commission_provider_amount'] ?? 0)) > 0 && !empty($data['provider_id']))
+                $this->createLedgerDebt($exchange, $p, $currencySent, 'payable', $data['provider_id'], Provider::class, "Comisión Proveedor");
+
+            if (($b = (float)($data['commission_broker_amount'] ?? 0)) > 0 && !empty($data['broker_id']))
+                $this->createLedgerDebt($exchange, $b, $currencySent, 'payable', $data['broker_id'], Broker::class, "Comisión Corredor");
+
+            if (($pl = (float)($data['commission_admin_amount'] ?? 0)) > 0 && !empty($data['platform_id']))
+                $this->createLedgerDebt($exchange, $pl, $currencySent, 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
+
+            // Comisión de la casa (Solo si ya se cobró/entregó la operación se marca como pagada, si no queda pendiente)
+            if (($c = (float)($data['commission_charged_amount'] ?? 0)) > 0 && !empty($exchange->client_id)) {
+                $commStatus = $isDelivered ? 'paid' : 'pending';
+                $this->createLedgerDebt($exchange, $c, $currencyReceived, 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $commStatus);
             }
 
             return $exchange->load('client');

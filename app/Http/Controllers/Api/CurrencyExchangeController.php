@@ -24,7 +24,7 @@ class CurrencyExchangeController extends Controller
             'client_id'     => 'nullable|integer',
             'broker_id'     => 'nullable|integer',
             'admin_user_id' => 'nullable|integer',
-            'status'        => 'nullable|string|in:pending,completed',
+            'status'        => 'nullable|string',
             'start_date'    => 'nullable|date_format:Y-m-d',
             'end_date'      => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
         ]);
@@ -71,9 +71,10 @@ class CurrencyExchangeController extends Controller
             'commission_provider_pct' => 'nullable|numeric|min:0',
             'commission_broker_pct'   => 'nullable|numeric|min:0',
 
-            // Referencia y Entrega
+            // Referencia y Entrega/Pago
             'reference_id'            => 'nullable|string|max:255',
             'delivered'               => 'sometimes|boolean',
+            'paid'                    => 'sometimes|boolean', // <--- NUEVO CAMPO AÑADIDO
 
             // --- NUEVOS CAMPOS: CAPITAL DE TERCERO ---
             'capital_type'            => 'required|in:own,investor',
@@ -120,9 +121,24 @@ class CurrencyExchangeController extends Controller
         $dataToService['investor_profit_pct']    = $request->get('investor_profit_pct', 0);
         $dataToService['investor_profit_amount'] = $request->get('investor_profit_amount', 0);
 
-        // Estado según entrega física
+        // --- ESTADOS DE PAGO Y ENTREGA ---
+        $isDelivered = $request->boolean('delivered', true);
+        $isPaid      = $request->boolean('paid', true); // <--- CAPTURAMOS EL CHECKBOX
+
+        $dataToService['delivered'] = $isDelivered;
+        $dataToService['paid']      = $isPaid;
+
+        // Estado según lógica combinada
         if ($request->operation_type === 'purchase') {
-            $dataToService['status']        = $request->boolean('delivered', true) ? 'completed' : 'pending';
+            if (!$isDelivered && !$isPaid) {
+                $dataToService['status'] = 'pending_both'; // Pendiente de todo
+            } elseif (!$isDelivered) {
+                $dataToService['status'] = 'pending_delivery'; // Por Cobrar (Falta entregar/recibir USD)
+            } elseif (!$isPaid) {
+                $dataToService['status'] = 'pending_payment'; // Por Pagar (Falta pagar VES)
+            } else {
+                $dataToService['status'] = 'completed';
+            }
             $dataToService['exchange_rate'] = $dataToService['received_rate'];
         } else {
             $dataToService['status'] = 'completed';
