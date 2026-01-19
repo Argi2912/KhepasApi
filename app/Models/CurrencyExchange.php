@@ -10,10 +10,17 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Spatie\Activitylog\LogOptions;
 use Spatie\Activitylog\Traits\LogsActivity;
+use Illuminate\Database\Eloquent\SoftDeletes; // <--- 1. IMPORTAR SOFT DELETES
+
 
 class CurrencyExchange extends Model
 {
-    use HasFactory, BelongsToTenant, LogsActivity, Filterable;
+    use HasFactory, SoftDeletes; // <--- 2. AGREGAR ESTO
+
+    protected $guarded = [];
+
+
+     use HasFactory, BelongsToTenant, LogsActivity, Filterable;
 
     protected $fillable = [
         'tenant_id',
