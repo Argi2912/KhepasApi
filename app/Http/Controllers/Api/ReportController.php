@@ -5,13 +5,9 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-
-// Librerías de exportación
 use Maatwebsite\Excel\Facades\Excel;
 use Barryvdh\DomPDF\Facade\Pdf;
-use App\Exports\UniversalExport; 
-
-// Modelos
+use App\Exports\UniversalExport;
 use App\Models\CurrencyExchange;
 use App\Models\InternalTransaction;
 use App\Models\LedgerEntry;
@@ -19,7 +15,7 @@ use App\Models\LedgerEntry;
 class ReportController extends Controller
 {
     // =========================================================================
-    //  1. MATRIZ DE RENTABILIDAD
+    //  1. MATRIZ DE RENTABILIDAD (CORREGIDO: TOP 15 POR GANANCIA)
     // =========================================================================
     public function profitMatrix(Request $request)
     {
@@ -36,8 +32,7 @@ class ReportController extends Controller
             ->whereNotNull('from_account_id')
             ->whereNotNull('to_account_id')
             ->selectRaw('
-                from_account_id,
-                to_account_id,
+                from_account_id, to_account_id,
                 COUNT(*) as total_ops,
                 SUM(amount_sent) as total_sent,
                 SUM(amount_received) as total_received,
@@ -49,16 +44,15 @@ class ReportController extends Controller
             $query->whereBetween('created_at', [$start, $end]);
         }
 
-        $data = $query->with([
-                'fromAccount:id,name,currency_code',
-                'toAccount:id,name,currency_code'
-            ])
-            ->orderByDesc('total_received')
-            ->get();
+        // CAMBIO 1: Ordenar por 'total_profit' (Ganancia) para ver las más rentables
+        $data = $query->with(['fromAccount', 'toAccount'])
+                      ->orderByDesc('total_profit') 
+                      ->get();
 
         $routes = $data->filter(fn($r) => $r->total_received > 0);
 
-        $top10 = $routes->take(10)->map(fn($item) => [
+        // CAMBIO 2: Tomar 15 registros
+        $top15 = $routes->take(15)->map(fn($item) => [
             'source'           => $item->fromAccount?->name ?? 'N/A',
             'source_currency'  => $item->fromAccount?->currency_code ?? '???',
             'destination'      => $item->toAccount?->name ?? 'N/A',
@@ -72,61 +66,207 @@ class ReportController extends Controller
         return response()->json([
             'matrix_data' => $routes->values()->map(fn($item) => [
                 'from_account_id'   => $item->from_account_id,
-                'from_account'      => [
-                    'id'            => $item->fromAccount?->id,
-                    'name'          => $item->fromAccount?->name ?? 'N/A',
-                    'currency_code' => $item->fromAccount?->currency_code ?? '???',
-                ],
+                'from_account'      => ['id' => $item->fromAccount?->id, 'name' => $item->fromAccount?->name ?? 'N/A', 'currency_code' => $item->fromAccount?->currency_code ?? '???'],
                 'to_account_id'     => $item->to_account_id,
-                'to_account'        => [
-                    'id'            => $item->toAccount?->id,
-                    'name'          => $item->toAccount?->name ?? 'N/A',
-                    'currency_code' => $item->toAccount?->currency_code ?? '???',
-                ],
+                'to_account'        => ['id' => $item->toAccount?->id, 'name' => $item->toAccount?->name ?? 'N/A', 'currency_code' => $item->toAccount?->currency_code ?? '???'],
                 'total_sent'        => round((float) $item->total_sent, 2),
                 'total_received'    => round((float) $item->total_received, 2),
                 'total_profit'      => round((float) $item->total_profit, 2),
                 'total_ops'         => (int) $item->total_ops,
             ]),
-            'top_10' => $top10,
+            'top_10' => $top15, // Enviamos las 15 rutas aquí
             'summary' => [
                 'total_routes'       => $routes->count(),
                 'total_volume_sent'  => round($routes->sum('total_sent'), 2),
                 'total_volume_received' => round($routes->sum('total_received'), 2),
                 'total_profit'       => round($routes->sum('total_profit'), 2),
                 'total_operations'   => $routes->sum('total_ops'),
-                'period' => $request->filled('start_date') && $request->filled('end_date')
-                    ? ['from' => $request->start_date, 'to' => $request->end_date]
-                    : null,
+                'period' => $request->filled('start_date') ? ['from' => $request->start_date, 'to' => $request->end_date] : null,
             ]
         ]);
     }
 
     // =========================================================================
-    //  2. DESCARGA DE REPORTES
+    //  2. DESCARGA DE REPORTES (Sincronizado con StatisticsController)
     // =========================================================================
     public function download(Request $request)
     {
+        $user = Auth::user(); 
+        if (!$user) abort(401, 'No autenticado');
+
         $type = $request->input('report_type');
         $format = $request->input('format', 'excel');
+        $entityId = $request->input('entity_id');
         
         $data = collect([]);
         $headers = [];
         $title = "Reporte del Sistema";
 
+        $applyDateFilter = function($q) use ($request) {
+            if ($request->start_date) $q->whereDate('created_at', '>=', $request->start_date);
+            if ($request->end_date) $q->whereDate('created_at', '<=', $request->end_date);
+        };
+
+        // LÓGICA DE CÁLCULO IDÉNTICA A STATISTICS CONTROLLER
+        $selectRawLogic = '
+            COUNT(*) as total_ops,
+            SUM(amount_sent + amount_received) as total_moved,  /* CAMBIO CLAVE: Suma de ambos montos */
+            SUM(COALESCE(commission_total_amount, 0)) as total_gross, /* Ganancia Bruta */
+            SUM(amount_received) as total_net                     /* Ganancia Neta */
+        ';
+
         switch ($type) {
+            // -----------------------------------------------------------------
+            // 1. RESUMEN DE CLIENTES
+            // -----------------------------------------------------------------
+            case 'clients_summary':
+                $title = "Resumen por Cliente";
+                $headers = ['Cliente', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+
+                $query = CurrencyExchange::query()
+                    ->where('tenant_id', $user->tenant_id)
+                    ->where('status', 'completed') // ✅ Solo completadas
+                    ->whereNotNull('client_id')
+                    ->with('client')
+                    ->selectRaw('client_id, ' . $selectRawLogic)
+                    ->groupBy('client_id')
+                    ->orderByDesc('total_moved');
+
+                if ($entityId) $query->where('client_id', $entityId);
+                $applyDateFilter($query);
+
+                $data = $query->get()->map(fn($item) => [
+                    'name'   => $item->client->name ?? 'Cliente Eliminado',
+                    'ops'    => $item->total_ops,
+                    'vol'    => number_format($item->total_moved, 2),
+                    'gross'  => number_format($item->total_gross, 2),
+                    'net'    => number_format($item->total_net, 2)
+                ]);
+                break;
+
+            // -----------------------------------------------------------------
+            // 2. RESUMEN DE CORREDORES
+            // -----------------------------------------------------------------
+            case 'brokers_summary':
+                $title = "Resumen por Corredor";
+                $headers = ['Corredor', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+
+                $query = CurrencyExchange::query()
+                    ->where('tenant_id', $user->tenant_id)
+                    ->where('status', 'completed')
+                    ->whereNotNull('broker_id')
+                    ->with('broker')
+                    ->selectRaw('broker_id, ' . $selectRawLogic)
+                    ->groupBy('broker_id')
+                    ->orderByDesc('total_moved');
+
+                if ($entityId) $query->where('broker_id', $entityId);
+                $applyDateFilter($query);
+
+                $data = $query->get()->map(fn($item) => [
+                    'name'   => $item->broker->name ?? 'Broker Eliminado',
+                    'ops'    => $item->total_ops,
+                    'vol'    => number_format($item->total_moved, 2),
+                    'gross'  => number_format($item->total_gross, 2),
+                    'net'    => number_format($item->total_net, 2)
+                ]);
+                break;
+
+            // -----------------------------------------------------------------
+            // 3. RESUMEN DE PROVEEDORES
+            // -----------------------------------------------------------------
+            case 'providers_summary':
+                $title = "Resumen por Proveedor";
+                $headers = ['Proveedor', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+
+                $query = CurrencyExchange::query()
+                    ->where('tenant_id', $user->tenant_id)
+                    ->where('status', 'completed')
+                    ->whereNotNull('provider_id')
+                    ->with('provider')
+                    ->selectRaw('provider_id, ' . $selectRawLogic)
+                    ->groupBy('provider_id')
+                    ->orderByDesc('total_moved');
+
+                if ($entityId) $query->where('provider_id', $entityId);
+                $applyDateFilter($query);
+
+                $data = $query->get()->map(fn($item) => [
+                    'name'   => $item->provider->name ?? 'Proveedor Eliminado',
+                    'ops'    => $item->total_ops,
+                    'vol'    => number_format($item->total_moved, 2),
+                    'gross'  => number_format($item->total_gross, 2),
+                    'net'    => number_format($item->total_net, 2)
+                ]);
+                break;
+
+            // -----------------------------------------------------------------
+            // 4. RESUMEN DE PLATAFORMAS
+            // -----------------------------------------------------------------
+            case 'platforms_summary':
+                $title = "Resumen por Plataforma";
+                $headers = ['Plataforma/Cuenta', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+
+                $query = CurrencyExchange::query()
+                    ->where('tenant_id', $user->tenant_id)
+                    ->where('status', 'completed')
+                    ->whereNotNull('to_account_id')
+                    ->with('toAccount')
+                    ->selectRaw('to_account_id, ' . $selectRawLogic)
+                    ->groupBy('to_account_id')
+                    ->orderByDesc('total_moved');
+
+                if ($entityId) $query->where('to_account_id', $entityId);
+                $applyDateFilter($query);
+
+                $data = $query->get()->map(fn($item) => [
+                    'name'   => $item->toAccount->name ?? 'N/A',
+                    'ops'    => $item->total_ops,
+                    'vol'    => number_format($item->total_moved, 2),
+                    'gross'  => number_format($item->total_gross, 2),
+                    'net'    => number_format($item->total_net, 2)
+                ]);
+                break;
+
+            // -----------------------------------------------------------------
+            // 5. MATRIZ DE RENTABILIDAD (DESCARGA)
+            // -----------------------------------------------------------------
+            case 'profit_matrix':
+                $title = "Matriz de Rentabilidad";
+                $headers = ['Ruta (Origen -> Destino)', 'Operaciones', 'Volumen Recibido', 'Ganancia Generada'];
+                
+                $query = CurrencyExchange::query()
+                    ->where('tenant_id', $user->tenant_id)
+                    ->where('status', 'completed')
+                    ->whereNotNull('from_account_id')
+                    ->whereNotNull('to_account_id')
+                    ->selectRaw('
+                        from_account_id, to_account_id,
+                        COUNT(*) as total_ops,
+                        SUM(amount_received) as total_received,
+                        SUM(COALESCE(commission_admin_amount, 0)) as total_profit
+                    ')
+                    ->groupBy('from_account_id', 'to_account_id')
+                    ->with(['fromAccount', 'toAccount'])
+                    ->orderByDesc('total_received');
+                
+                $applyDateFilter($query);
+                
+                $data = $query->get()->map(fn($item) => [
+                    'route' => ($item->fromAccount->name ?? 'N/A') . ' ➜ ' . ($item->toAccount->name ?? 'N/A'),
+                    'ops' => $item->total_ops,
+                    'vol' => number_format($item->total_received, 2) . ' ' . ($item->toAccount->currency_code ?? ''),
+                    'profit' => number_format($item->total_profit, 2)
+                ]);
+                break;
+
             case 'operations':
                 $title = "Historial de Operaciones";
                 $headers = ['Ref', 'Fecha', 'Cliente', 'Tipo', 'Envía', 'Recibe', 'Tasa', 'Estado'];
-                
-                // CORRECCIÓN AQUÍ: Usamos 'adminUser' en lugar de 'user'
-                $query = CurrencyExchange::with(['client', 'adminUser'])->orderBy('created_at', 'desc');
-                
+                $query = CurrencyExchange::with(['client', 'adminUser'])->where('tenant_id', $user->tenant_id)->orderBy('created_at', 'desc');
                 if ($request->client_id) $query->where('client_id', $request->client_id);
                 if ($request->broker_id) $query->where('broker_id', $request->broker_id);
-                if ($request->start_date) $query->whereDate('created_at', '>=', $request->start_date);
-                if ($request->end_date) $query->whereDate('created_at', '<=', $request->end_date);
-                
+                $applyDateFilter($query);
                 $data = $query->get()->map(fn($item) => [
                     'ref' => $item->number ?? $item->id,
                     'date' => $item->created_at->format('Y-m-d H:i'),
@@ -139,15 +279,13 @@ class ReportController extends Controller
                 ]);
                 break;
 
+            case 'internal': 
             case 'cash_flow':
                 $title = "Reporte de Caja y Gastos";
                 $headers = ['Fecha', 'Tipo', 'Categoría', 'Cuenta', 'Monto', 'Descripción'];
-                
-                $query = InternalTransaction::with('account')->orderBy('transaction_date', 'desc');
-                
+                $query = InternalTransaction::with('account')->where('tenant_id', $user->tenant_id)->orderBy('transaction_date', 'desc');
                 if ($request->start_date) $query->whereDate('transaction_date', '>=', $request->start_date);
                 if ($request->end_date) $query->whereDate('transaction_date', '<=', $request->end_date);
-
                 $data = $query->get()->map(fn($item) => [
                     'date' => $item->transaction_date,
                     'type' => $item->type === 'income' ? 'INGRESO' : 'EGRESO',
@@ -163,11 +301,7 @@ class ReportController extends Controller
                 $isPayable = ($type === 'payables');
                 $title = $isPayable ? "Cuentas por Pagar" : "Cuentas por Cobrar";
                 $headers = ['Vencimiento', 'Entidad', 'Descripción', 'Monto Total', 'Pagado', 'Pendiente'];
-                
-                $query = LedgerEntry::where('type', $isPayable ? 'payable' : 'receivable')
-                    ->with('entity')
-                    ->orderBy('due_date', 'asc');
-
+                $query = LedgerEntry::where('type', $isPayable ? 'payable' : 'receivable')->where('tenant_id', $user->tenant_id)->with('entity')->orderBy('due_date', 'asc');
                 $data = $query->get()->map(fn($item) => [
                     'due' => $item->due_date,
                     'ent' => $item->entity->name ?? 'N/A',
@@ -179,6 +313,7 @@ class ReportController extends Controller
                 break;
                 
             default:
+                \Log::warning("Reporte solicitado con tipo desconocido: " . $type);
                 $data = collect([]);
         }
 
@@ -191,7 +326,7 @@ class ReportController extends Controller
                 'title' => $title,
                 'headers' => $headers,
                 'data' => $data,
-                'companyName' => 'Khepas'
+                'companyName' => $user->tenant->name ?? 'Khepas'
             ]);
             return $pdf->setPaper('a4', 'landscape')->download("{$type}_" . date('Ymd') . ".pdf");
         }
