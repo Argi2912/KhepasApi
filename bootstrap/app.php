@@ -15,6 +15,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role'       => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
+            'tenant.active' => \App\Http\Middleware\EnsureTenantIsActive::class, // Agregado
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

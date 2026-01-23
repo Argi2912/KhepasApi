@@ -5,131 +5,141 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use App\Models\Investor;
 use App\Models\LedgerEntry;
+use App\Models\InternalTransaction;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class CalculateInvestorInterests extends Command
 {
-    // Firma con las opciones para pruebas manuales
-    protected $signature = 'investors:calculate-interest {--force : Forzar el pago ignorando fechas} {--id= : ID específico para probar}';
-    
-    protected $description = 'Calcula interés compuesto y lo SUMA a la deuda existente.';
+    protected $signature = 'investors:calculate-interest {--force : Forzar el pago aunque no sea la fecha o ya esté pagado} {--id= : ID específico}';
+    protected $description = 'Calcula intereses y crea una fila NUEVA de deuda por el rendimiento.';
 
     public function handle()
     {
-        $force = $this->option('force');
+        $this->info("🤖 INICIANDO ROBOT DE INTERESES...");
+
+        $force = $this->option('force'); // Detectar si usamos --force
         $specificId = $this->option('id');
-
         $today = Carbon::now();
-        $day = $today->day;
-        $isLastDay = $today->copy()->endOfMonth()->isToday();
 
-        $this->info("📅 Fecha: {$today->toDateString()}");
-        if ($force) $this->warn("🔥 MODO FORZADO ACTIVADO");
-
-        // QUERY DE INVERSIONISTAS
+        // 1. Buscar Inversionistas
         $query = Investor::where('is_active', true);
-
-        if ($specificId) {
-            $query->where('id', $specificId);
-        } elseif (!$force) {
-            $query->where(function ($q) use ($day, $isLastDay) {
-                $q->where('payout_day', $day);
-                if ($isLastDay) $q->orWhere('payout_day', '>', $day);
-            });
-        }
-
+        if ($specificId) $query->where('id', $specificId);
         $investors = $query->get();
-
+        
         if ($investors->isEmpty()) {
-            $this->info("✅ No hay inversionistas pendientes.");
+            $this->error("❌ No encontré inversionistas activos.");
             return;
         }
 
-        $count = 0;
+        $this->info("✅ Encontré " . $investors->count() . " inversionistas activos.");
 
         foreach ($investors as $investor) {
+            $this->info("------------------------------------------------");
+            $this->info("🔍 Analizando a: {$investor->name} (ID: {$investor->id})");
 
-            // Validación de fecha (si no es forzado)
+            // =================================================================
+            // 🛡️ PROTECCIONES (EVITAR COBRO DOBLE O FECHA INCORRECTA)
+            // =================================================================
+            
             if (!$force) {
-                $lastDate = $investor->last_interest_date ? Carbon::parse($investor->last_interest_date) : null;
-                if ($lastDate && $lastDate->month == $today->month && $lastDate->year == $today->year) {
-                    $this->warn("⚠️ {$investor->name} ya cobró este mes. Saltando.");
+                // 1. Chequeo de duplicado: ¿Ya se corrió hoy?
+                if ($investor->last_interest_date && Carbon::parse($investor->last_interest_date)->isToday()) {
+                    $this->warn("   ⏸️ Este inversionista YA cobró hoy ({$today->toDateString()}). Saltando para no duplicar.");
+                    continue; 
+                }
+
+                // 2. Chequeo de fecha de corte: ¿Hoy es su día de pago?
+                // (Si hoy es 22 y su payout_day es 22, procede. Si no, salta).
+                if ($investor->payout_day && $today->day != $investor->payout_day) {
+                    $this->comment("   🗓️ Hoy es día {$today->day}, pero su día de corte es el {$investor->payout_day}. Esperando...");
                     continue;
                 }
+            } else {
+                $this->warn("   ⚠️ MODO FUERZA ACTIVO: Ignorando validaciones de fecha.");
+            }
+            // =================================================================
+
+            // 2. Buscar Deudas
+            $entries = $investor->ledgerEntries()
+                ->where('type', 'payable')
+                ->whereIn('status', ['pending', 'partial'])
+                ->get();
+
+            if ($entries->isEmpty()) {
+                $this->warn("   ⚠️ No tiene deudas pendientes activas.");
+                continue;
             }
 
-            DB::transaction(function () use ($investor) {
+            // Agrupar por moneda
+            $entriesByCurrency = $entries->groupBy('currency_code');
+
+            foreach ($entriesByCurrency as $currencyCode => $groupEntries) {
                 
-                // 1. Agrupar deudas por moneda
-                $entriesByCurrency = $investor->ledgerEntries()
-                    ->where('type', 'payable')
-                    ->where('status', '!=', 'paid')
-                    ->get()
-                    ->groupBy('currency_code');
+                // 3. Calcular Capital Base
+                $capitalBase = $groupEntries->sum(function ($entry) {
+                    return $entry->original_amount - $entry->paid_amount;
+                });
 
-                $generatedAny = false;
+                $this->info("   💰 Moneda: $currencyCode | Capital Base Calculado: $capitalBase");
 
-                foreach ($entriesByCurrency as $currencyCode => $entries) {
-                    
-                    // Calcular Capital Base (Suma de todo lo que le debemos en esa moneda)
-                    $capitalBase = $entries->sum(function ($entry) {
-                        return $entry->original_amount - $entry->paid_amount;
-                    });
+                if ($capitalBase <= 0) {
+                    $this->warn("   ⚠️ El capital base es 0 o negativo. Saltando.");
+                    continue;
+                }
 
-                    if ($capitalBase <= 0) continue;
+                // 4. Obtener Porcentaje (interest_rate)
+                $percentage = floatval($investor->interest_rate);
 
-                    // Calcular Interés
-                    $interestAmount = $capitalBase * ($investor->interest_rate / 100);
+                if ($percentage <= 0) {
+                    $this->error("   ❌ ERROR: El porcentaje (interest_rate) es 0%.");
+                    continue; 
+                }
 
-                    if ($interestAmount <= 0) continue;
+                // 5. Calcular Interés
+                $interestAmount = $capitalBase * ($percentage / 100);
+                $interestAmount = round($interestAmount, 2);
 
-                    // 🔥 CAMBIO CLAVE: BUSCAR DEUDA EXISTENTE PARA UNIFICAR 🔥
-                    // Buscamos la primera deuda activa en esa moneda para sumarle el interés ahí mismo
-                    $existingDebt = $investor->ledgerEntries()
-                        ->where('type', 'payable')
-                        ->where('currency_code', $currencyCode)
-                        ->where('status', '!=', 'paid')
-                        ->orderBy('id', 'asc') // Usamos la más antigua como la principal
-                        ->first();
+                $this->info("   🧮 Cálculo: $capitalBase * $percentage% = $interestAmount");
 
-                    if ($existingDebt) {
-                        // A) ACTUALIZAR EXISTENTE (Engordar la deuda)
-                        $existingDebt->amount += $interestAmount;
-                        $existingDebt->original_amount += $interestAmount;
-                        // Opcional: Actualizar descripción para que se sepa que hubo un movimiento
-                        // $existingDebt->description = "Capital Base + Rendimientos"; 
-                        $existingDebt->save();
+                if ($interestAmount <= 0) {
+                    $this->warn("   ⚠️ El interés calculado es 0. Saltando.");
+                    continue;
+                }
 
-                        $this->info("📈 {$investor->name}: Deuda actualizada +{$interestAmount} {$currencyCode} (Nuevo Total: {$existingDebt->amount})");
-
-                    } else {
-                        // B) CREAR NUEVA (Solo si no tenía deuda previa, caso raro)
+                // 6. CREAR LA NUEVA FILA
+                try {
+                    DB::transaction(function () use ($investor, $interestAmount, $capitalBase, $currencyCode, $percentage) {
                         $investor->ledgerEntries()->create([
                             'tenant_id'       => $investor->tenant_id ?? 1,
-                            'description'     => "Capital Inicial + Rendimiento (" . now()->format('Y-m') . ")",
-                            'amount'          => $interestAmount,
-                            'original_amount' => $interestAmount,
-                            'currency_code'   => $currencyCode ?: 'USD',
-                            'paid_amount'     => 0,
+                            'entity_type'     => get_class($investor),
+                            'entity_id'       => $investor->id,
                             'type'            => 'payable',
+                            'amount'          => $interestAmount, 
+                            'original_amount' => $interestAmount,
+                            'paid_amount'     => 0,
                             'status'          => 'pending',
+                            'currency_code'   => $currencyCode ?: 'USD',
+                            'description'     => "Interés Generado ({$percentage}%)",
                             'due_date'        => now(),
+                            'created_at'      => now(),
                         ]);
-                        $this->info("🆕 {$investor->name}: Nueva Deuda creada +{$interestAmount}");
-                    }
+                        
+                        // Actualizar saldo visual
+                        $investor->increment('available_balance', $interestAmount);
+                        
+                        // Actualizar la fecha de último cobro a HOY para activar el bloqueo de duplicados
+                        $investor->forceFill(['last_interest_date' => Carbon::today()])->save();
+                    });
 
-                    $generatedAny = true;
+                    $this->info("   ✅ ¡ÉXITO! Fila de interés creada por $interestAmount.");
+
+                } catch (\Exception $e) {
+                    $this->error("   ❌ ERROR AL GUARDAR EN BD: " . $e->getMessage());
                 }
-
-                if ($generatedAny) {
-                    $investor->forceFill(['last_interest_date' => Carbon::today()])->save();
-                }
-            });
-
-            $count++;
+            }
         }
-
-        $this->info("🏁 Proceso completado. {$count} inversores procesados.");
+        
+        $this->info("🤖 PROCESO TERMINADO.");
     }
 }

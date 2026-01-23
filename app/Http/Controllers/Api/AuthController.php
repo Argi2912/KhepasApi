@@ -1,9 +1,11 @@
 <?php
+
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+
 
 class AuthController extends Controller
 {
@@ -13,14 +15,36 @@ class AuthController extends Controller
      */
     public function login(Request $request)
     {
+        // 1. Validar formato de entrada
         $credentials = $request->validate([
             'email'    => 'required|email',
             'password' => 'required|string',
         ]);
 
+        // 2. Intentar loguear (verifica email y contraseña)
         if (! $token = Auth::guard('api')->attempt($credentials)) {
-            return response()->json(['error' => 'Unauthorized'], 401);
+            return response()->json(['error' => 'Credenciales incorrectas'], 401);
         }
+
+        // --- INICIO DE LA SOLUCIÓN DE BLOQUEO ---
+        
+        // 3. Obtener el usuario que acaba de pasar la validación de contraseña
+        $user = Auth::guard('api')->user();
+
+        // 4. Verificar si el USUARIO está desactivado (is_active = 0)
+        // Nota: Asegúrate de que tu modelo User tenga 'is_active' en $fillable
+        if ($user->is_active == false) {
+            Auth::guard('api')->logout(); // Invalidar el token inmediatamente
+            return response()->json(['error' => 'Su cuenta ha sido desactivada.'], 403);
+        }
+
+        // 5. Verificar si el TENANT (Empresa) está desactivado
+        if ($user->tenant && $user->tenant->is_active == false) {
+            Auth::guard('api')->logout(); // Invalidar el token inmediatamente
+            return response()->json(['error' => 'Acceso denegado: Su organización se encuentra inactiva.'], 403);
+        }
+
+        // --- FIN DE LA SOLUCIÓN ---
 
         return $this->respondWithToken($token);
     }

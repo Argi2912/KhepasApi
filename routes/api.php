@@ -63,7 +63,7 @@ Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'supe
 | 3. RUTAS DEL TENANT (SISTEMA OPERATIVO)
 |--------------------------------------------------------------------------
 */
-Route::group(['middleware' => ['auth:api']], function () {
+Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
 
     // --- A. Autenticación y Perfil ---
     Route::post('logout', [AuthController::class, 'logout']);
@@ -165,14 +165,18 @@ Route::group(['middleware' => ['auth:api']], function () {
     // 1. Resumen de Cuentas (Tarjetas Rojas/Verdes) - IMPORTANTE: Debe ir antes del resource
     Route::get('ledger/summary', [LedgerEntryController::class, 'summary']);
 
-    // 2. Pagar Deuda
+    // 2. [NUEVO] VISTA AGRUPADA (El fix del error 405)
+    // Al estar aquí, Laravel la encuentra antes de confundirla con un ID.
+    Route::get('ledger/grouped', [LedgerEntryController::class, 'groupedPayables']);
+
+    // 3. Pagar Deuda
     Route::post('ledger/{ledger_entry}/pay', [LedgerEntryController::class, 'pay']);
 
-    // 3. Listado General
+    // 4. Listado General
     Route::apiResource('ledger', LedgerEntryController::class)
         ->only(['index', 'store', 'update']);
 
-    // 4. Historial
+    // 5. Historial
     Route::get('audit-logs', [AuditLogController::class, 'index'])
         ->middleware('permission:view_database_history');
 

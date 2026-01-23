@@ -34,10 +34,11 @@ class InternalTransactionController extends Controller
 
     public function store(Request $request)
     {
-        // Validación (Se mantiene igual)
+        // Validación
         $validated = $request->validate([
             'source_type'      => 'nullable|in:account,investor,provider',
-            'account_id'       => 'required',
+            // 👇 CAMBIO AQUÍ: Se cambió de 'required' a 'nullable' para permitir operaciones sin banco
+            'account_id'       => 'nullable', 
             'user_id'          => 'required',
             'type'             => 'required|in:income,expense',
             'amount'           => 'required|numeric|min:0.01',

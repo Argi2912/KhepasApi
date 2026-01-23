@@ -26,7 +26,14 @@ class User extends Authenticatable implements JWTSubject
         'name',
         'email',
         'password',
-        'tenant_id'
+        'tenant_id',
+        'is_active', // <--- AGREGAR ESTO
+    ];
+
+    protected $casts = [
+        'email_verified_at' => 'datetime',
+        'password' => 'hashed',
+        'is_active' => 'boolean', // <--- RECOMENDADO: Asegura que siempre sea true/false
     ];
 
     /**

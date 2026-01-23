@@ -20,30 +20,36 @@ class LedgerEntryController extends Controller
         $this->transactionService = $transactionService;
     }
 
+    // 1. VISTA DETALLADA (HISTORIAL DE MOVIMIENTOS)
     public function index(Request $request)
     {
         $query = LedgerEntry::query()
             ->with(['entity', 'transaction']);
 
+        // Filtros Básicos
         $query->when($request->type, fn($q, $t) => $q->where('type', $t));
         $query->when($request->status, fn($q, $s) => $q->where('status', $s));
 
+        // --- CORRECCIÓN CLAVE PARA EL ACORDEÓN ---
+        // Ahora el backend sí escucha cuando le pides datos de una sola persona
+        $query->when($request->entity_type, fn($q, $t) => $q->where('entity_type', $t)); 
+        $query->when($request->entity_id, fn($q, $id) => $q->where('entity_id', $id));   
+        $query->when($request->currency_code, fn($q, $c) => $q->where('currency_code', $c)); 
+        // ------------------------------------------
+
+        // Búsqueda Avanzada
         $query->when($request->search, function ($q, $search) {
             $q->where(function ($q) use ($search) {
                 $q->where('description', 'like', "%{$search}%")
                 
-                    // [CORRECCIÓN PRINCIPAL AQUÍ]
-                    // Usamos whereHasMorph para aplicar lógica distinta según el modelo
                     ->orWhereHasMorph('transaction', [
                         \App\Models\CurrencyExchange::class,
                         \App\Models\InternalTransaction::class
                     ], function ($q, $type) use ($search) {
                         
-                        // Si es CurrencyExchange, buscamos por 'number' (CE-XXXX)
                         if ($type === \App\Models\CurrencyExchange::class) {
                             $q->where('number', 'like', "%{$search}%");
                         } 
-                        // Si es InternalTransaction, buscamos por ID o Descripción (NO tiene number)
                         elseif ($type === \App\Models\InternalTransaction::class) {
                             $q->where('id', 'like', "%{$search}%")
                               ->orWhere('description', 'like', "%{$search}%");
@@ -71,6 +77,43 @@ class LedgerEntryController extends Controller
 
         return $query->latest()->paginate(15)->withQueryString();
     }
+
+    /**
+     * =========================================================================
+     * NUEVO MÉTODO: VISTA AGRUPADA (TOTALES POR PERSONA)
+     * =========================================================================
+     * Este método suma todas las deudas separadas de un mismo inversor/proveedor
+     * y te devuelve una sola línea con el total que debes.
+     */
+    public function groupedPayables(Request $request)
+    {
+        // 1. Filtramos solo DEUDAS (payable) que NO estén pagadas al 100%
+        $query = LedgerEntry::where('type', 'payable')
+            ->where('status', '!=', 'paid');
+
+        // Filtro opcional por moneda (para no mezclar Peras con Manzanas)
+        $query->when($request->currency_code, fn($q, $c) => $q->where('currency_code', $c));
+        
+        // 2. Agrupamos por Entidad (Quién) y Moneda (Qué)
+        $grouped = $query->select(
+                'entity_type',
+                'entity_id',
+                'currency_code',
+                DB::raw('SUM(amount) as total_original_debt'),           // Cuánto pediste prestado en total histórico
+                DB::raw('SUM(paid_amount) as total_paid'),               // Cuánto has abonado en total histórico
+                DB::raw('SUM(amount - paid_amount) as total_pending'),   // 🟢 LO QUE DEBES HOY (Saldo vivo)
+                DB::raw('COUNT(id) as movements_count'),                 // Cuántos depósitos/movimientos forman esta deuda
+                DB::raw('MIN(due_date) as oldest_due_date')              // Fecha del movimiento más antiguo
+            )
+            ->groupBy('entity_type', 'entity_id', 'currency_code')
+            ->with('entity') // Carga el nombre del Inversor/Proveedor
+            ->orderByDesc('total_pending') // Ordenar: Los que más se les debe primero
+            ->paginate(15);
+
+        return response()->json($grouped);
+    }
+
+    // EL RESTO DEL CÓDIGO PERMANECE INTACTO
 
     public function store(Request $request)
     {

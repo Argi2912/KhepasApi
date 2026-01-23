@@ -4,28 +4,23 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Account;
-use Illuminate\Http\Request; // Reemplaza con Form Requests
+use Illuminate\Http\Request;
 
 class AccountController extends Controller
 {
     public function index(Request $request)
     {
         $request->validate([
-            'currency_code' => 'nullable|string|size:3',
+            'currency_code' => 'nullable|string|max:5',
             'start_date' => 'nullable|date_format:Y-m-d',
             'end_date' => 'nullable|date_format:Y-m-d|after_or_equal:start_date',
-            // 'search' => 'nullable|string|max:100' // <-- Si añades scopeSearch
         ]);
 
         $query = Account::query();
 
         $query->when($request->currency_code, function ($q, $code) {
-            return $q->currencyCode($code); // Llama al scopeCurrencyCode()
+            return $q->currencyCode($code);
         });
-
-        // $query->when($request->search, function ($q, $term) {
-        //     return $q->search($term); 
-        // });
 
         $query->when($request->start_date, function ($q, $date) {
             return $q->fromDate($date);
@@ -44,6 +39,8 @@ class AccountController extends Controller
             'name' => 'required|string|max:255',
             'currency_code' => 'required|string|max:5',
             'balance' => 'required|numeric|min:0',
+            'type' => 'nullable|string',    // Agregado para soportar tipo de cuenta
+            'details' => 'nullable|string', // Agregado para soportar detalles
         ]);
 
         $account = Account::create($validated);
@@ -56,12 +53,19 @@ class AccountController extends Controller
         return $account;
     }
 
+    /**
+     * Actualiza la cuenta.
+     * 🛡️ BLINDAJE: Se han eliminado 'balance' y 'currency_code' de la validación.
+     * Esto impide que se modifique el dinero o la moneda al editar el nombre.
+     */
     public function update(Request $request, Account $account)
     {
         $validated = $request->validate([
-            'name' => 'sometimes|required|string|max:255',
-            'currency_code' => 'sometimes|required|string|size:3',
-            'balance' => 'sometimes|required|numeric|min:0', // Usar un endpoint dedicado para ajustar balance es mejor
+            'name'    => 'sometimes|required|string|max:255',
+            'type'    => 'nullable|string',
+            'details' => 'nullable|string',
+            // 🚨 IMPORTANTE: No incluimos 'balance' ni 'currency_code' aquí.
+            // Si el frontend los envía, Laravel los ignorará porque no están validados.
         ]);
 
         $account->update($validated);
@@ -71,6 +75,11 @@ class AccountController extends Controller
 
     public function destroy(Account $account)
     {
+        // 🛡️ Seguridad: No permitir borrar cuentas con dinero
+        if ($account->balance > 0 || $account->balance < 0) {
+             return response()->json(['message' => 'No se puede eliminar una cuenta que tiene saldo (positivo o negativo).'], 400);
+        }
+
         $account->delete();
         return response()->noContent();
     }

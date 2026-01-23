@@ -164,19 +164,21 @@ class TransactionService
             }
 
             // C) COMISIONES Y TERCEROS
+            // 🚨 CAMBIO APLICADO: Moneda forzada a 'USD'
             if (($p = (float)($data['commission_provider_amount'] ?? 0)) > 0 && !empty($data['provider_id']))
-                $this->createLedgerDebt($exchange, $p, $currencySent, 'payable', $data['provider_id'], Provider::class, "Comisión Proveedor");
+                $this->createLedgerDebt($exchange, $p, 'USD', 'payable', $data['provider_id'], Provider::class, "Comisión Proveedor");
 
             if (($b = (float)($data['commission_broker_amount'] ?? 0)) > 0 && !empty($data['broker_id']))
-                $this->createLedgerDebt($exchange, $b, $currencySent, 'payable', $data['broker_id'], Broker::class, "Comisión Corredor");
+                $this->createLedgerDebt($exchange, $b, 'USD', 'payable', $data['broker_id'], Broker::class, "Comisión Corredor");
 
             if (($pl = (float)($data['commission_admin_amount'] ?? 0)) > 0 && !empty($data['platform_id']))
-                $this->createLedgerDebt($exchange, $pl, $currencySent, 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
+                $this->createLedgerDebt($exchange, $pl, 'USD', 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
 
             // Comisión de la casa (Solo si ya se cobró/entregó la operación se marca como pagada, si no queda pendiente)
             if (($c = (float)($data['commission_charged_amount'] ?? 0)) > 0 && !empty($exchange->client_id)) {
                 $commStatus = $isDelivered ? 'paid' : 'pending';
-                $this->createLedgerDebt($exchange, $c, $currencyReceived, 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $commStatus);
+                // 🚨 CAMBIO APLICADO: Moneda forzada a 'USD'
+                $this->createLedgerDebt($exchange, $c, 'USD', 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $commStatus);
             }
 
             return $exchange->load('client');
@@ -347,7 +349,21 @@ class TransactionService
                             'transaction_type' => InternalTransaction::class // Opcional, para rastreo
                         ]);
                     }
-                    // LÓGICA ORIGINAL PARA INVERSORES (NO SE TOCA)
+                    // 2. INVERSIONISTAS (Mover Capital a Caja Operativa) - [CORREGIDO]
+                    elseif ($entity instanceof Investor) {
+                        // Verificamos saldo disponible DIRECTO en la entidad, no en Ledgers
+                        if ($entity->available_balance < $amount) {
+                            throw new Exception("Saldo disponible insuficiente en Inversionista ({$entity->available_balance}).");
+                        }
+                        
+                        // Descontamos del saldo disponible (Liquidez)
+                        $entity->decrement('available_balance', $amount);
+
+                        // 🚨 IMPORTANTE: NO TOCAMOS LOS LEDGERS.
+                        // La deuda (LedgerEntry) sigue "Pending" porque el dinero es del inversor, 
+                        // solo lo estamos moviendo a una cuenta interna para trabajarlo.
+                    }
+                    // LÓGICA ORIGINAL PARA OTROS (NO SE TOCA)
                     else {
                         $ledgers = LedgerEntry::where('entity_type', get_class($entity))
                             ->where('entity_id', $entity->id)
@@ -421,10 +437,14 @@ class TransactionService
             // -----------------------------------------------------------------
             // D. REGISTRO HISTÓRICO
             // -----------------------------------------------------------------
+            
+            // 👇 CORRECCIÓN APLICADA: Si no es una cuenta bancaria, guardamos NULL
+            $dbAccountId = ($sourceType === 'account') ? $data['account_id'] : null;
+
             $transaction = InternalTransaction::create([
                 'tenant_id' => Auth::user()->tenant_id ?? 1,
                 'user_id' => $data['user_id'],
-                'account_id' => $data['account_id'],
+                'account_id' => $dbAccountId, // <--- Usamos la variable segura
                 'source_type' => $sourceType,
                 'type' => $data['type'],
                 'category' => $data['category'],

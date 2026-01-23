@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Employee;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class EmployeeController extends Controller
 {
@@ -18,16 +19,7 @@ class EmployeeController extends Controller
                   ->orWhere('position', 'like', "%{$val}%");
         }
 
-        // Paginamos
-        $employees = $query->latest()->paginate(15);
-        
-        // Adjuntamos el saldo "al vuelo" para verlo en la tabla
-        $employees->getCollection()->transform(function ($emp) {
-            $emp->pending_balance = $emp->pending_salary;
-            return $emp;
-        });
-
-        return $employees;
+        return $query->latest()->paginate(15);
     }
 
     public function store(Request $request)
@@ -35,7 +27,7 @@ class EmployeeController extends Controller
         $data = $request->validate([
             'name' => 'required|string',
             'salary_amount' => 'required|numeric|min:0',
-            'currency_code' => 'required|string|size:3', // USD, VES, EUR
+            'currency_code' => 'required|string|size:3',
             'payment_frequency' => 'required|in:weekly,biweekly,monthly',
             'position' => 'nullable|string',
             'email' => 'nullable|email',
@@ -46,32 +38,6 @@ class EmployeeController extends Controller
 
         $employee = Employee::create($data);
         return response()->json($employee, 201);
-    }
-
-    /**
-     * Cargar saldo manual (Billetera)
-     */
-    public function addBalance(Request $request, Employee $employee)
-    {
-        // 1. Validar
-        $request->validate([
-            'amount' => 'required|numeric|min:0.01',
-            'description' => 'nullable|string|max:255',
-            'currency' => 'required|string|size:3' 
-        ]);
-
-        // 2. Usar el servicio (Asegúrate de tener TransactionService inyectado en el constructor)
-        // Si no tienes el servicio inyectado, puedes hacerlo rápido así:
-        $service = app(\App\Services\TransactionService::class);
-        
-        $service->addBalanceToEntity(
-            $employee, 
-            $request->amount, 
-            $request->description ?? 'Pago / Adelanto de Nómina',
-            $request->currency
-        );
-
-        return response()->json(['message' => 'Saldo registrado correctamente']);
     }
 
     public function update(Request $request, Employee $employee)
@@ -86,50 +52,77 @@ class EmployeeController extends Controller
         return response()->json(['message' => 'Empleado eliminado']);
     }
     
-    // Ver un solo empleado
     public function show(Employee $employee)
     {
-        $employee->pending_balance = $employee->pending_salary;
         return response()->json($employee);
     }
+
+    /**
+     * PROCESAR NÓMINA (Actualizado)
+     * Puede procesar un empleado específico o todos.
+     */
     public function processPayroll(Request $request)
-{
-    // 1. Buscar empleados activos
-    $employees = Employee::where('is_active', true)->get();
-    
-    $count = 0;
-    
-    foreach ($employees as $employee) {
-        // 2. Aquí podrías calcular si es quincenal o mensual.
-        // Por ahora, asumiremos que se genera el monto completo de su salario base.
-        $amount = $employee->salary_amount; 
-
-        // 3. Crear la entrada en el Libro Mayor (Ledger)
-        // ESTO ES LO QUE "ACTIVA" LA DEUDA EN ROJO
-        $employee->ledgerEntries()->create([
-            'tenant_id' => $employee->tenant_id ?? 1, // Tu ID de sucursal
-            'type' => 'payable', // Payable = La empresa DEBE dinero (Pasivo)
-            'status' => 'pending',
-            
-            // Montos
-            'amount' => $amount,         // Monto del movimiento
-            'original_amount' => $amount, // Deuda original
-            'pending_amount' => $amount,  // Lo que se debe (al inicio es todo)
-            'paid_amount' => 0,
-            
-            'currency_code' => $employee->currency_code ?? 'USD',
-            'description' => 'Nómina Generada: ' . now()->format('d/m/Y'),
-            'due_date' => now()->addDays(1), // Vence mañana
+    {
+        // Validamos si nos envían un ID específico
+        $request->validate([
+            'employee_id' => 'nullable|exists:employees,id'
         ]);
-        
-        $count++;
+
+        return DB::transaction(function () use ($request) {
+            
+            // 1. Decidir a quién procesar
+            $query = Employee::where('is_active', true);
+
+            if ($request->filled('employee_id')) {
+                // Si enviaron ID, filtramos solo ese
+                $query->where('id', $request->employee_id);
+                $mode = "individual";
+            } else {
+                $mode = "masiva";
+            }
+
+            $employees = $query->get();
+            
+            if ($employees->isEmpty()) {
+                return response()->json(['message' => 'No hay empleados activos para procesar.'], 422);
+            }
+
+            $count = 0;
+            $processedNames = [];
+
+            foreach ($employees as $employee) {
+                $amount = $employee->salary_amount; 
+
+                // Creamos la deuda (Pasivo / Payable) en el Ledger
+                $employee->ledgerEntries()->create([
+                    'tenant_id' => $employee->tenant_id ?? 1,
+                    'type' => 'payable', 
+                    'status' => 'pending',
+                    'amount' => $amount,         
+                    'original_amount' => $amount, 
+                    'pending_amount' => $amount,  
+                    'paid_amount' => 0,
+                    'currency_code' => $employee->currency_code ?? 'USD',
+                    'description' => 'Nómina: ' . now()->format('d/m/Y'),
+                    'due_date' => now()->addDays(1), 
+                ]);
+                
+                $count++;
+                $processedNames[] = $employee->name;
+            }
+
+            // Mensaje personalizado según el modo
+            if ($mode === 'individual') {
+                $msg = "Nómina generada exitosamente para: " . implode(", ", $processedNames);
+            } else {
+                $msg = "Nómina masiva procesada para $count empleados.";
+            }
+
+            return response()->json([
+                'message' => $msg,
+                'status' => 'success',
+                'count' => $count
+            ]);
+        });
     }
-
-    return response()->json([
-        'message' => "Nómina procesada para $count empleados",
-        'status' => 'success'
-    ]);
 }
-
-}
-

@@ -36,51 +36,44 @@ class Investor extends Model
         return $this->morphMany(LedgerEntry::class, 'entity');
     }
 
-    // Permitimos flexibilidad para encontrar datos viejos
-    public function transactions()
+    // ✅ CORRECCIÓN CLAVE: Cambiado de hasMany a morphMany
+    // Ahora busca transacciones donde (entity_type = Investor Y entity_id = ID_Inversionista)
+    // en lugar de buscar por account_id (que ahora es nulo).
+    public function transactions(): MorphMany
     {
-        return $this->hasMany(InternalTransaction::class, 'account_id');
+        return $this->morphMany(InternalTransaction::class, 'entity');
     }
 
-    // 1. CAPITAL BASE (Tus $2,000)
-    // Busca el monto mayor entre el Historial y el Ledger
+    // 1. CAPITAL BASE
     public function getCapitalHistoricoAttribute()
     {
-        // Suma Historial (si existe)
+        // Suma Historial (Ingresos)
         $historialSum = $this->transactions()
             ->where('type', 'income')
-            ->where(function($q) {
-                $q->where('source_type', 'investor')->orWhere('source_type', 'account');
-            })
             ->sum('amount');
 
-        // Suma Ledger (Cuentas por Pagar)
+        // Suma Ledger (Deuda Capital)
         $ledgerSum = $this->ledgerEntries()
             ->where('type', 'payable')
             ->sum('original_amount');
 
-        // Retorna el mayor (En tu caso, los $2,000 del Ledger)
         return max($historialSum, $ledgerSum);
     }
 
-    // 2. SALDO DISPONIBLE (Lo que te queda)
-    // FÓRMULA: (Capital Base) - (Total Retiros)
+    // 2. SALDO DISPONIBLE
     public function getAvailableBalanceAttribute()
     {
-        // PASO A: Obtener el Total Ingresado (Reutilizamos la lógica de arriba)
-        $totalIngresos = $this->capital_historico; // Esto vale 2,000
+        // PASO A: Obtener el Total Ingresado
+        $totalIngresos = $this->capital_historico;
 
         // PASO B: Obtener Total Retirado (Egresos)
-        // Sumamos todas las salidas de dinero (Transferencias a tus cuentas)
+        // Gracias a la corrección en transactions(), esto ahora SÍ encontrará
+        // los retiros aunque no tengan cuenta bancaria asociada.
         $totalRetiros = $this->transactions()
             ->where('type', 'expense')
-            ->where(function($q) {
-                $q->where('source_type', 'investor')->orWhere('source_type', 'account');
-            })
-            ->sum('amount'); // Esto vale 1,000
+            ->sum('amount');
 
         // PASO C: La Resta
-        // 2,000 - 1,000 = 1,000
         return $totalIngresos - $totalRetiros;
     }
 }
