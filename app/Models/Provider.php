@@ -15,8 +15,24 @@ class Provider extends Model
 {
     use HasFactory, BelongsToTenant, Filterable;
 
-    protected $fillable = ['tenant_id', 'name', 'contact_person', 'email', 'phone'];
-    protected $appends = ['current_balance', 'available_balance'];
+    // 1. AGREGA 'available_balance' AQUÍ
+    protected $fillable = [
+        'tenant_id', 
+        'name', 
+        'contact_person', 
+        'email', 
+        'phone', 
+        'available_balance', // <--- IMPORTANTE: Permite guardar el saldo de la billetera
+        'is_active'
+    ];
+
+    // 2. QUITA 'available_balance' DE AQUÍ (Ya es una columna real, no calculada)
+    protected $appends = ['current_balance'];
+
+    protected $casts = [
+        'available_balance' => 'float', // Asegura que siempre se lea como número
+        'is_active' => 'boolean'
+    ];
 
     public function ledgerEntries(): MorphMany
     {
@@ -29,18 +45,18 @@ class Provider extends Model
             ->where('source_type', 'provider');
     }
 
-    // --- LÓGICA DE NEGOCIO CORREGIDA ---
+    // --- LÓGICA DE NEGOCIO ---
 
     /**
      * DEUDA TOTAL (Current Balance)
-     * Suma de todas las 'Cuentas por Pagar' (Payables) generadas por tus retiros.
-     * Resta lo que ya hayas pagado (Pagos a deuda).
+     * Esto sigue igual: Suma cuánto le debemos realmente (dinero que ya movimos a nuestro banco).
      */
     public function getCurrentBalanceAttribute()
     {
-        // Sumamos lo pendiente en Ledgers de tipo 'payable'
+        // Sumamos lo pendiente en Ledgers de tipo 'payable' (Deuda real)
         return $this->ledgerEntries()
             ->where('type', 'payable')
+            ->where('status', '!=', 'paid') // Solo sumamos lo que no está pagado
             ->get()
             ->sum(function($entry) {
                 return $entry->amount - $entry->paid_amount;
@@ -48,25 +64,17 @@ class Provider extends Model
     }
 
     /**
-     * SALDO DISPONIBLE (Available Balance)
-     * Es tu Cupo Total ('receivable') menos tu Deuda Actual.
+     * ❌ ELIMINADO: getAvailableBalanceAttribute
+     * * Razón: Ahora 'available_balance' es una columna real en la base de datos.
+     * Si dejabas esta función, el sistema ignoraba la columna y trataba de calcular 
+     * el saldo sumando facturas viejas, lo cual daba error o negativo.
+     * * Ahora Laravel leerá directamente la columna 'available_balance'.
      */
-    public function getAvailableBalanceAttribute()
-    {
-        // 1. Cupo Total (Cargas de Saldo) -> Ahora se guardan como 'receivable'
-        $cupoTotal = $this->ledgerEntries()
-            ->where('type', 'receivable')
-            ->sum('original_amount');
-
-        // 2. Deuda Actual
-        $deuda = $this->current_balance;
-
-        return $cupoTotal - $deuda;
-    }
     
     // ... (Resto de relaciones y scopes sin cambios) ...
     public function currencyExchanges(): HasMany { return $this->hasMany(CurrencyExchange::class); }
     public function dollarPurchases(): HasMany { return $this->hasMany(DollarPurchase::class); }
+    
     public function scopeSearch(Builder $query, $term): Builder
     {
         $term = "%{$term}%";

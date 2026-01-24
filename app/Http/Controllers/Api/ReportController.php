@@ -46,8 +46,8 @@ class ReportController extends Controller
 
         // CAMBIO 1: Ordenar por 'total_profit' (Ganancia) para ver las más rentables
         $data = $query->with(['fromAccount', 'toAccount'])
-                      ->orderByDesc('total_profit') 
-                      ->get();
+            ->orderByDesc('total_profit')
+            ->get();
 
         $routes = $data->filter(fn($r) => $r->total_received > 0);
 
@@ -89,20 +89,21 @@ class ReportController extends Controller
     // =========================================================================
     //  2. DESCARGA DE REPORTES (Sincronizado con StatisticsController)
     // =========================================================================
+    
     public function download(Request $request)
     {
-        $user = Auth::user(); 
+        $user = Auth::user();
         if (!$user) abort(401, 'No autenticado');
 
         $type = $request->input('report_type');
         $format = $request->input('format', 'excel');
         $entityId = $request->input('entity_id');
-        
+
         $data = collect([]);
         $headers = [];
         $title = "Reporte del Sistema";
 
-        $applyDateFilter = function($q) use ($request) {
+        $applyDateFilter = function ($q) use ($request) {
             if ($request->start_date) $q->whereDate('created_at', '>=', $request->start_date);
             if ($request->end_date) $q->whereDate('created_at', '<=', $request->end_date);
         };
@@ -234,7 +235,7 @@ class ReportController extends Controller
             case 'profit_matrix':
                 $title = "Matriz de Rentabilidad";
                 $headers = ['Ruta (Origen -> Destino)', 'Operaciones', 'Volumen Recibido', 'Ganancia Generada'];
-                
+
                 $query = CurrencyExchange::query()
                     ->where('tenant_id', $user->tenant_id)
                     ->where('status', 'completed')
@@ -249,9 +250,9 @@ class ReportController extends Controller
                     ->groupBy('from_account_id', 'to_account_id')
                     ->with(['fromAccount', 'toAccount'])
                     ->orderByDesc('total_received');
-                
+
                 $applyDateFilter($query);
-                
+
                 $data = $query->get()->map(fn($item) => [
                     'route' => ($item->fromAccount->name ?? 'N/A') . ' ➜ ' . ($item->toAccount->name ?? 'N/A'),
                     'ops' => $item->total_ops,
@@ -279,24 +280,55 @@ class ReportController extends Controller
                 ]);
                 break;
 
-            case 'internal': 
+            case 'internal':
             case 'cash_flow':
                 $title = "Reporte de Caja y Gastos";
-                $headers = ['Fecha', 'Tipo', 'Categoría', 'Cuenta', 'Monto', 'Descripción'];
-                $query = InternalTransaction::with('account')->where('tenant_id', $user->tenant_id)->orderBy('transaction_date', 'desc');
+                $headers = ['Fecha', 'Tipo', 'Categoría', 'Cuenta / Billetera', 'Monto', 'Descripción'];
+                
+                // 🔥 AQUÍ AGREGAMOS 'entity' PARA PODER LEER PROVEEDORES/INVERSIONISTAS
+                $query = InternalTransaction::with(['account', 'entity']) 
+                    ->where('tenant_id', $user->tenant_id)
+                    ->orderBy('transaction_date', 'desc');
+
                 if ($request->start_date) $query->whereDate('transaction_date', '>=', $request->start_date);
                 if ($request->end_date) $query->whereDate('transaction_date', '<=', $request->end_date);
-                $data = $query->get()->map(fn($item) => [
-                    'date' => $item->transaction_date,
-                    'type' => $item->type === 'income' ? 'INGRESO' : 'EGRESO',
-                    'cat'  => $item->category,
-                    'acc'  => $item->account->name ?? '---',
-                    'amt'  => number_format($item->amount, 2),
-                    'desc' => $item->description
-                ]);
+                
+                $data = $query->get()->map(function($item) {
+                    
+                    // LÓGICA PARA DETECTAR BILLETERAS VIRTUALES EN EL PDF/EXCEL
+                    $accName = 'Cuenta Eliminada';
+
+                    // 1. Si es Banco Real
+                    if ($item->account) {
+                        $accName = $item->account->name;
+                    } 
+                    // 2. Si es Billetera de Proveedor
+                    elseif ($item->entity_type && str_contains($item->entity_type, 'Provider')) {
+                        $realName = $item->entity ? $item->entity->name : ($item->person_name ?? 'Proveedor');
+                        $accName = "Billetera: $realName";
+                    }
+                    // 3. Si es Capital de Inversionista
+                    elseif ($item->entity_type && str_contains($item->entity_type, 'Investor')) {
+                        $realName = $item->entity ? $item->entity->name : ($item->person_name ?? 'Inversionista');
+                        $accName = "Capital: $realName";
+                    }
+                    // 4. Fallback manual
+                    elseif ($item->person_name) {
+                         $accName = "Virtual: " . $item->person_name;
+                    }
+
+                    return [
+                        'date' => $item->transaction_date,
+                        'type' => $item->type === 'income' ? 'INGRESO' : 'EGRESO',
+                        'cat'  => $item->category,
+                        'acc'  => $accName, // <--- Nombre corregido
+                        'amt'  => number_format($item->amount, 2),
+                        'desc' => $item->description
+                    ];
+                });
                 break;
 
-            case 'payables': 
+            case 'payables':
             case 'receivables':
                 $isPayable = ($type === 'payables');
                 $title = $isPayable ? "Cuentas por Pagar" : "Cuentas por Cobrar";
@@ -311,7 +343,7 @@ class ReportController extends Controller
                     'balance' => number_format($item->amount - $item->paid_amount, 2)
                 ]);
                 break;
-                
+
             default:
                 \Log::warning("Reporte solicitado con tipo desconocido: " . $type);
                 $data = collect([]);
@@ -319,14 +351,16 @@ class ReportController extends Controller
 
         if ($format === 'excel') {
             return Excel::download(new UniversalExport($data, $headers), "{$type}_" . date('Ymd') . ".xlsx");
-        } 
-        
+        }
+
         if ($format === 'pdf') {
             $pdf = Pdf::loadView('reports.generic_pdf', [
                 'title' => $title,
                 'headers' => $headers,
                 'data' => $data,
-                'companyName' => $user->tenant->name ?? 'Khepas'
+                'companyName' => $user->tenant->name ?? 'Khepas',
+                // Si estás generando un reporte filtrado por fecha, puedes pasar esto:
+                'dateRange' => ($request->start_date ? $request->start_date : 'Inicio') . ' al ' . ($request->end_date ? $request->end_date : 'Hoy')
             ]);
             return $pdf->setPaper('a4', 'landscape')->download("{$type}_" . date('Ymd') . ".pdf");
         }

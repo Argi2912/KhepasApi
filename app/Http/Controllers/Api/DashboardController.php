@@ -11,35 +11,59 @@ class DashboardController extends Controller
 {
     public function getSummary()
     {
-        // 1. Caja General
-        $caja_general = Account::select('currency_code', DB::raw('SUM(balance) as total_balance'))
+        // 1. Obtener CAJA (Agrupado por moneda)
+        // Usamos pluck para obtener un array tipo ['USD' => 100, 'VES' => 5000]
+        $caja = Account::select('currency_code', DB::raw('SUM(balance) as total'))
             ->groupBy('currency_code')
-            ->get();
+            ->pluck('total', 'currency_code');
 
-        // 2. Por Pagar (Pasivos Reales)
-        // Sumamos directamente del Ledger, donde se guardó la deuda al desmarcar "Pagado"
+        // 2. Obtener DEUDAS (Pasivos) agrupadas por moneda
+        // Filtramos solo lo pendiente y agrupamos por moneda para no mezclar divisas
         $por_pagar = LedgerEntry::where('type', 'payable')
             ->whereIn('status', ['pending', 'partially_paid'])
-            ->sum(DB::raw('amount - paid_amount'));
+            ->select('currency_code', DB::raw('SUM(amount - paid_amount) as total'))
+            ->groupBy('currency_code')
+            ->pluck('total', 'currency_code');
 
-        // 3. Por Cobrar (Activos Reales)
-        $por_cobrar_total = LedgerEntry::where('type', 'receivable')
+        // 3. Obtener CUENTAS POR COBRAR (Activos) agrupadas por moneda
+        $por_cobrar = LedgerEntry::where('type', 'receivable')
             ->whereIn('status', ['pending', 'partially_paid'])
-            ->sum(DB::raw('amount - paid_amount'));
+            ->select('currency_code', DB::raw('SUM(amount - paid_amount) as total'))
+            ->groupBy('currency_code')
+            ->pluck('total', 'currency_code');
 
-        // 4. Balance General
-        $caja_total_usd = $caja_general->firstWhere('currency_code', 'USD')?->total_balance ?? 0;
-        $balance_general = ($caja_total_usd + $por_cobrar_total) - $por_pagar;
+        // 4. Consolidar todo en un Balance Desglosado
+        // Obtenemos una lista única de todas las monedas que tienen algún movimiento
+        $all_currencies = $caja->keys()
+            ->merge($por_pagar->keys())
+            ->merge($por_cobrar->keys())
+            ->unique()
+            ->values();
+
+        $balance_desglosado = [];
+
+        foreach ($all_currencies as $code) {
+            $monto_caja      = $caja[$code] ?? 0;
+            $monto_pagar     = $por_pagar[$code] ?? 0;
+            $monto_cobrar    = $por_cobrar[$code] ?? 0;
+            
+            // Fórmula Financiera: Activos (Caja + Por Cobrar) - Pasivos (Por Pagar)
+            $neto = ($monto_caja + $monto_cobrar) - $monto_pagar;
+
+            // Solo agregamos a la lista si hay algún saldo relevante (evitamos mostrar monedas en 0 total)
+            if ($monto_caja != 0 || $monto_pagar != 0 || $monto_cobrar != 0) {
+                $balance_desglosado[] = [
+                    'currency_code' => $code,
+                    'caja'          => (float) $monto_caja,
+                    'por_cobrar'    => (float) $monto_cobrar,
+                    'por_pagar'     => (float) $monto_pagar,
+                    'balance_neto'  => (float) $neto,
+                ];
+            }
+        }
 
         return response()->json([
-            'caja_general_por_moneda' => $caja_general,
-            'total_por_pagar'         => round($por_pagar, 2),
-            'total_por_cobrar'        => round($por_cobrar_total, 2),
-            'desglose_por_cobrar'     => [
-                'ledger' => round($por_cobrar_total, 2),
-                'compras_pendientes' => 0 
-            ],
-            'balance_general_usd'     => round($balance_general, 2),
+            'breakdown' => $balance_desglosado
         ]);
     }
 }

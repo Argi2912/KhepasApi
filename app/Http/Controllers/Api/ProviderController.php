@@ -28,13 +28,16 @@ class ProviderController extends Controller
             $query->search($request->search);
         }
 
-        // El modelo Provider calcula los saldos automáticamente.
+        // Asegúrate de que aquí no estés usando un "Resource" que oculte el dato.
+        // Si devuelves el modelo directo así, Laravel enviará todas las columnas visibles.
         return $query->latest()->paginate(15)->withQueryString();
     }
 
     public function store(Request $request)
     {
         $data = $request->validate(['name' => 'required|string|max:255', 'contact_person' => 'nullable', 'email' => 'nullable', 'phone' => 'nullable']);
+        // Inicializamos el balance en 0 por seguridad
+        $data['available_balance'] = 0;
         return response()->json(Provider::create($data), 201);
     }
 
@@ -56,24 +59,15 @@ class ProviderController extends Controller
     }
 
     // --- FUNCIÓN CORREGIDA ---
-    public function addBalance(Request $request, Provider $provider)
-    {
-        $request->validate([
-            'amount' => 'required|numeric|min:0.01',
-            'description' => 'nullable|string|max:255'
-        ]);
+   public function addBalance(Request $request, Provider $provider)
+{
+    $request->validate(['amount' => 'required|numeric|min:0.01']);
 
-        // AQUÍ ESTABA EL ERROR: Faltaba enviar 'USD' como tercer parámetro.
-        $this->transactionService->addBalanceToEntity(
-            $provider, 
-            $request->amount, 
-            'USD', 
-            $request->description ?? 'Carga de saldo manual'
-        );
+    $this->transactionService->addBalanceToEntity($provider, $request->amount, 'USD', $request->description);
 
-        return response()->json([
-            'message' => 'Saldo agregado correctamente',
-            'new_balance' => $provider->available_balance
-        ]);
-    }
+    // 🔥 SIN ESTO, EL RESPONSE SEGUIRÁ MOSTRANDO 0 🔥
+    $provider->refresh(); 
+
+    return response()->json($provider); // Ahora llevará el available_balance actualizado
+}
 }

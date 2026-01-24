@@ -33,9 +33,12 @@ use App\Http\Controllers\Api\Superadmin\ActivityLogController;
 use App\Http\Controllers\Api\Superadmin\TenantController;
 use App\Http\Controllers\Api\TenantUserController;
 use App\Http\Controllers\Api\TransactionRequestController;
+use App\Http\Controllers\Api\DailyClosingController;
 // AGREGAMOS ESTA IMPORTACIÓN QUE FALTABA
 use App\Http\Controllers\Api\EmployeeController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\TransactionController;
 
 /*
 |--------------------------------------------------------------------------
@@ -56,6 +59,7 @@ Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'supe
     Route::patch('/tenants/{tenant}/toggle', [TenantController::class, 'toggleStatus']);
 
     Route::get('/logs', [ActivityLogController::class, 'index']);
+    
 });
 
 /*
@@ -64,6 +68,9 @@ Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'supe
 |--------------------------------------------------------------------------
 */
 Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
+
+    // Ruta para el Daily Closing
+    Route::get('/daily-closing', [DailyClosingController::class, 'index']);
 
     // --- A. Autenticación y Perfil ---
     Route::post('logout', [AuthController::class, 'logout']);
@@ -88,6 +95,7 @@ Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
 
     // [NUEVO] Ruta única para descargar cualquier reporte (Excel/PDF)
     Route::get('/reports/download', [App\Http\Controllers\Api\ReportController::class, 'download']);
+    Route::get('/reports/receipt/{id}', [ReportController::class, 'downloadTransactionReceipt']);
 
 
     // Opcional: Agrega las rutas para el resto de los reportes para ser consistentes
@@ -185,10 +193,16 @@ Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
 
     Route::apiResource('investors', InvestorController::class);
 
+    //provider
+
+    Route::post('/transactions/add-balance', [TransactionController::class, 'addBalance']);
+
     // --- G. Gestión de Usuarios ---
     Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])
         ->middleware('permission:manage_users');
 
     Route::apiResource('users', TenantUserController::class)
         ->middleware('permission:manage_users');
+        
 });
+
