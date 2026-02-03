@@ -8,10 +8,13 @@ use App\Http\Controllers\Api\AccountController;
 | Importación de Controladores
 |--------------------------------------------------------------------------
 */
+
+
 // Autenticación y Globales
 use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BrokerController;
+use App\Http\Controllers\Api\RegisterController;
 
 // Tableros y Reportes
 use App\Http\Controllers\Api\ClientController;
@@ -48,6 +51,13 @@ use App\Http\Controllers\Api\TransactionController;
 
 Route::post('login', [AuthController::class, 'login']);
 
+
+// Registro público (sin middleware auth)
+Route::post('/register', [RegisterController::class, 'register']);
+
+// Webhook público de Binance Pay (sin auth ni CSRF)
+Route::post('/webhook/binance-pay', [RegisterController::class, 'binanceWebhook'])->name('binance.webhook');
+
 /*
 |--------------------------------------------------------------------------
 | 2. RUTAS DE SUPERADMIN
@@ -59,7 +69,6 @@ Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'supe
     Route::patch('/tenants/{tenant}/toggle', [TenantController::class, 'toggleStatus']);
 
     Route::get('/logs', [ActivityLogController::class, 'index']);
-    
 });
 
 /*
@@ -203,6 +212,4 @@ Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
 
     Route::apiResource('users', TenantUserController::class)
         ->middleware('permission:manage_users');
-        
 });
-

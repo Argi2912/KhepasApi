@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "1b87a071b606ca511b0821b9cd50b20b",
+    "content-hash": "646768545f184983ec28e7216130526d",
     "packages": [
         {
             "name": "barryvdh/laravel-dompdf",
@@ -82,6 +82,79 @@
                 }
             ],
             "time": "2025-02-13T15:07:54+00:00"
+        },
+        {
+            "name": "binance/binance-connector-php",
+            "version": "v4.0.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/binance/binance-connector-php.git",
+                "reference": "65cf47d8aac434c6c331406160e04e2b11b01ce6"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/binance/binance-connector-php/zipball/65cf47d8aac434c6c331406160e04e2b11b01ce6",
+                "reference": "65cf47d8aac434c6c331406160e04e2b11b01ce6",
+                "shasum": ""
+            },
+            "require": {
+                "ext-curl": "*",
+                "ext-json": "*",
+                "ext-mbstring": "*",
+                "guzzlehttp/guzzle": "^7.3",
+                "guzzlehttp/psr7": "^1.7 || ^2.0",
+                "php": "^8.1"
+            },
+            "require-dev": {
+                "phpunit/phpunit": "^8.0 || ^9.0"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Binance\\Common\\": "src/common/lib/",
+                    "Binance\\Client\\C2c\\": "src/c2c/lib/",
+                    "Binance\\Client\\Nft\\": "src/nft/lib/",
+                    "Binance\\Client\\Pay\\": "src/pay/lib/",
+                    "Binance\\Client\\Algo\\": "src/algo/lib/",
+                    "Binance\\Client\\Fiat\\": "src/fiat/lib/",
+                    "Binance\\Client\\Spot\\": "src/spot/lib/",
+                    "Binance\\Client\\Mining\\": "src/mining/lib/",
+                    "Binance\\Client\\Rebate\\": "src/rebate/lib/",
+                    "Binance\\Client\\Wallet\\": "src/wallet/lib/",
+                    "Binance\\Client\\Convert\\": "src/convert/lib/",
+                    "Binance\\Client\\Staking\\": "src/staking/lib/",
+                    "Binance\\Client\\VipLoan\\": "src/vip-loan/lib/",
+                    "Binance\\Client\\GiftCard\\": "src/gift-card/lib/",
+                    "Binance\\Client\\CryptoLoan\\": "src/crypto-loan/lib/",
+                    "Binance\\Client\\SimpleEarn\\": "src/simple-earn/lib/",
+                    "Binance\\Client\\SubAccount\\": "src/sub-account/lib/",
+                    "Binance\\Client\\CopyTrading\\": "src/copy-trading/lib/",
+                    "Binance\\Client\\MarginTrading\\": "src/margin-trading/lib/",
+                    "Binance\\Client\\DualInvestment\\": "src/dual-investment/lib/",
+                    "Binance\\Client\\DerivativesTradingOptions\\": "src/derivatives-trading-options/lib/",
+                    "Binance\\Client\\DerivativesTradingCoinFutures\\": "src/derivatives-trading-coin-futures/lib/",
+                    "Binance\\Client\\DerivativesTradingUsdsFutures\\": "src/derivatives-trading-usds-futures/lib/",
+                    "Binance\\Client\\DerivativesTradingPortfolioMargin\\": "src/derivatives-trading-portfolio-margin/lib/",
+                    "Binance\\Client\\DerivativesTradingPortfolioMarginPro\\": "src/derivatives-trading-portfolio-margin-pro/lib/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Binance",
+                    "email": "contact@binance.com"
+                }
+            ],
+            "description": "A thin layer for Binance API in PHP",
+            "homepage": "https://github.com/binance/binance-connector-php",
+            "support": {
+                "issues": "https://github.com/binance/binance-connector-php/issues",
+                "source": "https://github.com/binance/binance-connector-php/tree/v4.0.0"
+            },
+            "time": "2026-01-09T07:46:08+00:00"
         },
         {
             "name": "brick/math",

@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'binance_pay' => [
+        'key'    => env('BINANCE_PAY_KEY'),
+        'secret' => env('BINANCE_PAY_SECRET'),
+        'env'    => env('BINANCE_PAY_ENV', 'test'), // 'test' para sandbox, 'live' para producción
+    ],
 ];

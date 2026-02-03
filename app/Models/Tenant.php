@@ -14,6 +14,8 @@ class Tenant extends Model
     protected $fillable = [
         'name',
         'is_active',
+        'binance_merchant_trade_no',
+        'binance_prepay_id',
     ];
 
     /**
@@ -51,7 +53,7 @@ class Tenant extends Model
         return $this->hasMany(Provider::class);
     }
 
-   public function transactionRequests(): HasMany
+    public function transactionRequests(): HasMany
     {
         return $this->hasMany(TransactionRequest::class);
     }
@@ -71,7 +73,7 @@ class Tenant extends Model
     {
         return $this->hasMany(CurrencyExchange::class);
     }
-    
+
     /**
      * Plataformas del tenant
      */
