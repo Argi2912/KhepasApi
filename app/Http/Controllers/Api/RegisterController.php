@@ -17,7 +17,7 @@ class RegisterController extends Controller
     protected $apiKey;
     protected $apiSecret;
     protected $baseUrl;
-    protected $planPriceUsd = 1.00;
+    protected $planPriceUsd = 1.00; // Precio bajo para pruebas (ajusta cuando estés en producción)
 
     public function __construct()
     {
@@ -25,14 +25,12 @@ class RegisterController extends Controller
         $this->apiKey    = $config['key'];
         $this->apiSecret = $config['secret'];
 
+        // Cambia a 'test' en .env para usar sandbox
         $this->baseUrl = $config['env'] === 'test'
             ? 'https://testnet.bapi.binance.com'
             : 'https://bapi.binance.com';
     }
 
-    /**
-     * Genera la firma SHA512 requerida por Binance.
-     */
     private function generateSignature(string $timestamp, string $nonce, string $body): string
     {
         $payload = $timestamp . "\n" . $nonce . "\n" . $body . "\n";
@@ -65,53 +63,68 @@ class RegisterController extends Controller
                 ]);
                 $admin->assignRole('admin_tenant');
 
-                // 3. Preparar datos para Binance Pay
+                // 3. Preparar orden Binance Pay
                 $merchantTradeNo = 'REG-' . $tenant->id . '-' . Str::random(12);
+
                 $timestamp = (string) (round(microtime(true) * 1000));
                 $nonce     = Str::random(32);
 
                 $bodyArray = [
                     'merchantTradeNo' => $merchantTradeNo,
-                    'tradeType'       => 'WEB',
+                    'tradeType'       => 'WEB', // ¡¡REQUERIDO!! Para pagos desde navegador
                     'productName'     => 'Plan Básico - ' . $validated['company_name'],
                     'productDetail'   => 'Acceso completo al sistema TuConpay',
                     'totalFee'        => number_format($this->planPriceUsd, 2, '.', ''),
                     'currency'        => 'USDT',
                     'goodsType'       => '01',
                     'goodsCategory'   => '0000',
-                    'terminalType'    => 'WEB' // Recomendado para evitar errores de validación
+                    // Opcional: URLs de retorno (puedes crear vistas simples success/cancel)
+                    // 'returnUrl'       => url('/payment/success'),
+                    // 'cancelUrl'       => url('/payment/cancel'),
                 ];
 
-                // IMPORTANTE: Usar flags para que el JSON sea idéntico en firma y envío
-                $body = json_encode($bodyArray, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                $body = json_encode($bodyArray);
+
                 $signature = $this->generateSignature($timestamp, $nonce, $body);
 
-                // 4. Request a Binance Pay usando withBody para enviar el string exacto
-                $response = Http::withoutVerifying()
-                    ->withHeaders([
-                        'BinancePay-Timestamp'      => $timestamp,
-                        'BinancePay-Nonce'          => $nonce,
-                        'BinancePay-Certificate-SN' => $this->apiKey,
-                        'BinancePay-Signature'      => $signature,
-                        'Content-Type'              => 'application/json',
-                    ])
-                    ->withBody($body, 'application/json')
-                    ->post($this->baseUrl . '/binancepay/openapi/v2/order');
+                // 4. Request a Binance Pay (v2 endpoint)
+                $response = Http::withHeaders([
+                    'BinancePay-Timestamp'       => $timestamp,
+                    'BinancePay-Nonce'           => $nonce,
+                    'BinancePay-Certificate-SN'  => $this->apiKey,
+                    'BinancePay-Signature'       => $signature,
+                    'Content-Type'               => 'application/json',
+                ])->post($this->baseUrl . '/binancepay/openapi/v2/order', $bodyArray);
+
+                // Mejor manejo de errores
+                if ($response->failed()) {
+                    throw new \Exception('Error de conexión con Binance Pay: ' . $response->status());
+                }
 
                 $respJson = $response->json();
 
-                // Log para auditoría técnica
-                Log::info('Respuesta Binance Pay:', ['body' => $response->body()]);
+                Log::info('Respuesta Completa de Binance:', $respJson);
 
-                if (!$response->successful() || ($respJson['status'] ?? null) !== 'SUCCESS') {
-                    $binanceCode = $respJson['code'] ?? 'S/N';
-                    $binanceMsg  = $respJson['errorMessage'] ?? 'Respuesta vacía o error de red';
-                    throw new \Exception("Binance dice ($binanceCode): $binanceMsg");
+                if ($response->failed() || ($respJson['status'] ?? null) !== 'SUCCESS') {
+                    // Extraemos el detalle del error que manda Binance
+                    $binanceCode = $respJson['code'] ?? 'N/A';
+                    $binanceMsg  = $respJson['errorMessage'] ?? 'Error sin mensaje detallado';
+
+                    // Si Binance manda errores de validación específicos, suelen venir en 'data'
+                    $extraData = isset($respJson['data']) ? json_encode($respJson['data']) : '';
+
+                    throw new \Exception("Binance dice ($binanceCode): $binanceMsg $extraData");
+                }
+
+                if (($respJson['status'] ?? null) !== 'SUCCESS') {
+                    $errorMsg = $respJson['errorMessage'] ?? 'Error desconocido';
+                    $errorCode = $respJson['code'] ?? 'N/A';
+                    throw new \Exception("Binance Pay error ({$errorCode}): {$errorMsg}");
                 }
 
                 $orderData = $respJson['data'];
 
-                // 5. Guardar datos de pago en el tenant
+                // 5. Guardar en tenant
                 $tenant->update([
                     'binance_merchant_trade_no' => $merchantTradeNo,
                     'binance_prepay_id'         => $orderData['prepayId'] ?? null,
@@ -124,6 +137,7 @@ class RegisterController extends Controller
                 ];
             });
 
+            // Ajustamos los nombres de campos según la respuesta REAL de Binance Pay
             return response()->json([
                 'message' => 'Registro exitoso. Completa el pago para activar tu cuenta.',
                 'data'    => [
@@ -131,20 +145,25 @@ class RegisterController extends Controller
                     'company_name' => $result['tenant']->name,
                     'admin_email'  => $result['admin']->email,
                     'payment'      => [
-                        'qr_code_url'   => $result['payment']['qrcodeLink'] ?? null,
-                        'checkout_url'  => $result['payment']['checkoutUrl'] ?? null,
-                        'deeplink'      => $result['payment']['deeplink'] ?? null,
+                        // URL directa a la imagen QR (perfecta para <img>)
+                        'qr_code_url'  => $result['payment']['qrcodeLink'] ?? null,
+                        // URL del checkout de Binance (redirección directa)
+                        'checkout_url' => $result['payment']['checkoutUrl'] ?? null,
+                        // Deep link para app Binance (opcional)
+                        'deeplink'     => $result['payment']['deeplink'] ?? null,
+                        // Universal URL (funciona en web y app)
                         'universal_url' => $result['payment']['universalUrl'] ?? null,
-                        'prepay_id'     => $result['payment']['prepayId'] ?? null,
+                        'prepay_id'    => $result['payment']['prepayId'] ?? null,
                     ],
                 ],
             ], 201);
         } catch (\Exception $e) {
+            // Loguea el error completo para debug (en production quita el detalle)
             Log::error('Registro Binance Pay fallido: ' . $e->getMessage());
 
             return response()->json([
                 'message' => 'Error en el registro o creación de orden de pago',
-                'error'   => $e->getMessage(),
+                'error'   => $e->getMessage(), // Quita esto en producción
             ], 500);
         }
     }
@@ -163,27 +182,27 @@ class RegisterController extends Controller
         $expectedSignature = $this->generateSignature($timestamp, $nonce, $body);
 
         if (!hash_equals($expectedSignature, $signature)) {
-            Log::warning('Webhook: Firma inválida detectada.');
             return response('Invalid signature', 400);
         }
 
-        $payload = json_decode($body, true);
+        $payload = $request->json()->all();
 
+        // Binance envía varios eventos, solo nos interesa el pago exitoso
         if (($payload['bizStatus'] ?? null) === 'PAY_SUCCESS') {
-            // En V2, los datos suelen venir dentro de una llave 'data' o directamente
-            $data = $payload['data'] ?? $payload;
-            $merchantTradeNo = $data['merchantTradeNo'] ?? null;
+            $merchantTradeNo = $payload['merchantTradeNo'] ?? null;
 
             if ($merchantTradeNo) {
                 $tenant = Tenant::where('binance_merchant_trade_no', $merchantTradeNo)->first();
 
                 if ($tenant && !$tenant->is_active) {
                     $tenant->update(['is_active' => true]);
-                    Log::info("Tenant {$tenant->id} activado por pago exitoso.");
+
+                    // Opcional: enviar email de bienvenida
+                    // Mail::to($tenant->admin->email)->send(new WelcomeMail($tenant));
                 }
             }
         }
 
-        return response()->json(['returnCode' => 'SUCCESS', 'returnMessage' => null], 200);
+        return response('OK', 200);
     }
 }
