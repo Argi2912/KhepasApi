@@ -11,6 +11,7 @@ use App\Exports\UniversalExport;
 use App\Models\CurrencyExchange;
 use App\Models\InternalTransaction;
 use App\Models\LedgerEntry;
+use Illuminate\Support\Facades\Log;
 
 class ReportController extends Controller
 {
@@ -89,7 +90,7 @@ class ReportController extends Controller
     // =========================================================================
     //  2. DESCARGA DE REPORTES (Sincronizado con StatisticsController)
     // =========================================================================
-    
+
     public function download(Request $request)
     {
         $user = Auth::user();
@@ -284,24 +285,24 @@ class ReportController extends Controller
             case 'cash_flow':
                 $title = "Reporte de Caja y Gastos";
                 $headers = ['Fecha', 'Tipo', 'Categoría', 'Cuenta / Billetera', 'Monto', 'Descripción'];
-                
+
                 // 🔥 AQUÍ AGREGAMOS 'entity' PARA PODER LEER PROVEEDORES/INVERSIONISTAS
-                $query = InternalTransaction::with(['account', 'entity']) 
+                $query = InternalTransaction::with(['account', 'entity'])
                     ->where('tenant_id', $user->tenant_id)
                     ->orderBy('transaction_date', 'desc');
 
                 if ($request->start_date) $query->whereDate('transaction_date', '>=', $request->start_date);
                 if ($request->end_date) $query->whereDate('transaction_date', '<=', $request->end_date);
-                
-                $data = $query->get()->map(function($item) {
-                    
+
+                $data = $query->get()->map(function ($item) {
+
                     // LÓGICA PARA DETECTAR BILLETERAS VIRTUALES EN EL PDF/EXCEL
                     $accName = 'Cuenta Eliminada';
 
                     // 1. Si es Banco Real
                     if ($item->account) {
                         $accName = $item->account->name;
-                    } 
+                    }
                     // 2. Si es Billetera de Proveedor
                     elseif ($item->entity_type && str_contains($item->entity_type, 'Provider')) {
                         $realName = $item->entity ? $item->entity->name : ($item->person_name ?? 'Proveedor');
@@ -314,7 +315,7 @@ class ReportController extends Controller
                     }
                     // 4. Fallback manual
                     elseif ($item->person_name) {
-                         $accName = "Virtual: " . $item->person_name;
+                        $accName = "Virtual: " . $item->person_name;
                     }
 
                     return [
@@ -345,7 +346,7 @@ class ReportController extends Controller
                 break;
 
             default:
-                \Log::warning("Reporte solicitado con tipo desconocido: " . $type);
+                Log::warning("Reporte solicitado con tipo desconocido: " . $type);
                 $data = collect([]);
         }
 

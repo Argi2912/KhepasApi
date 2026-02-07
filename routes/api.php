@@ -14,7 +14,6 @@ use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BrokerController;
-use App\Http\Controllers\Api\RegisterController;
 
 // Tableros y Reportes
 use App\Http\Controllers\Api\ClientController;
@@ -39,10 +38,11 @@ use App\Http\Controllers\Api\TransactionRequestController;
 use App\Http\Controllers\Api\DailyClosingController;
 // AGREGAMOS ESTA IMPORTACIÓN QUE FALTABA
 use App\Http\Controllers\Api\EmployeeController;
+use App\Http\Controllers\Api\RegisterController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\TransactionController;
-
+use App\Http\Controllers\Api\WebhookController;
 /*
 |--------------------------------------------------------------------------
 | 1. RUTAS PÚBLICAS
@@ -54,9 +54,14 @@ Route::post('login', [AuthController::class, 'login']);
 
 // Registro público (sin middleware auth)
 Route::post('/register', [RegisterController::class, 'register']);
+Route::get('tenants/check-status/{tenant}', function ($id) {
+    $tenant = \App\Models\Tenant::find($id);
+    return response()->json(['is_active' => $tenant->is_active]);
+});
 
-// Webhook público de Binance Pay (sin auth ni CSRF)
-Route::post('/webhook/binance-pay', [RegisterController::class, 'binanceWebhook'])->name('binance.webhook');
+Route::post('/webhooks/stripe', [WebhookController::class, 'handleStripe']);
+Route::post('/webhooks/paypal', [WebhookController::class, 'handlePayPal']);
+
 
 /*
 |--------------------------------------------------------------------------

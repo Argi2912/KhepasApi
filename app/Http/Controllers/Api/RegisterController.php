@@ -3,206 +3,136 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Tenant;
-use App\Models\User;
+use App\Models\{Tenant, User};
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\{DB, Hash, Log};
+use Stripe\StripeClient;
+use Srmklive\PayPal\Services\PayPal as PayPalClient;
 
 class RegisterController extends Controller
 {
-    protected $apiKey;
-    protected $apiSecret;
-    protected $baseUrl;
-    protected $planPriceUsd = 1.00; // Precio bajo para pruebas (ajusta cuando estés en producción)
-
-    public function __construct()
-    {
-        $config = config('services.binance_pay');
-        $this->apiKey    = $config['key'];
-        $this->apiSecret = $config['secret'];
-
-        // Cambia a 'test' en .env para usar sandbox
-        $this->baseUrl = $config['env'] === 'test'
-            ? 'https://testnet.bapi.binance.com'
-            : 'https://bapi.binance.com';
-    }
-
-    private function generateSignature(string $timestamp, string $nonce, string $body): string
-    {
-        $payload = $timestamp . "\n" . $nonce . "\n" . $body . "\n";
-        return strtoupper(hash_hmac('sha512', $payload, $this->apiSecret));
-    }
+    private $plans = [
+        'basic' => [
+            'name' => 'Plan Inicial - Casa de Cambio',
+            'price' => 10.00,
+            'stripe_price_id' => 'price_123_basic',
+            'paypal_plan_id'  => 'P-123_BASIC'
+        ],
+        'pro'   => [
+            'name' => 'Plan Profesional - Multi Divisa',
+            'price' => 29.99,
+            'stripe_price_id' => 'price_456_pro',
+            'paypal_plan_id'  => 'P-456_PRO'
+        ]
+    ];
 
     public function register(Request $request)
     {
-        $validated = $request->validate([
-            'company_name'     => 'required|string|max:255|unique:tenants,name',
-            'admin_name'       => 'required|string|max:255',
-            'admin_email'      => 'required|email|max:255|unique:users,email',
-            'password'         => 'required|string|min:8|confirmed',
+        $request->validate([
+            'company_name' => 'required|string|max:255|unique:tenants,name',
+            'admin_name'   => 'required|string|max:255',
+            'admin_email'  => 'required|email|unique:users,email',
+            'password'     => 'required|min:8|confirmed',
+            'plan'         => 'required|in:basic,pro',
+            'method'       => 'required|in:stripe,paypal'
         ]);
 
         try {
-            $result = DB::transaction(function () use ($validated) {
-                // 1. Crear Tenant inactivo
+            return DB::transaction(function () use ($request) {
+                $planData = $this->plans[$request->plan];
+
                 $tenant = Tenant::create([
-                    'name'      => $validated['company_name'],
+                    'name' => $request->company_name,
                     'is_active' => false,
+                    'plan_name' => $planData['name'],
+                    'plan_price' => $planData['price'],
+                    'payment_method' => $request->method
                 ]);
 
-                // 2. Crear Admin
-                $admin = User::create([
+                // Creamos el usuario admin
+                User::create([
+                    'name' => $request->admin_name,
+                    'email' => $request->admin_email,
+                    'password' => Hash::make($request->password),
                     'tenant_id' => $tenant->id,
-                    'name'      => $validated['admin_name'],
-                    'email'     => $validated['admin_email'],
-                    'password'  => Hash::make($validated['password']),
-                ]);
-                $admin->assignRole('admin_tenant');
-
-                // 3. Preparar orden Binance Pay
-                $merchantTradeNo = 'REG-' . $tenant->id . '-' . Str::random(12);
-
-                $timestamp = (string) (round(microtime(true) * 1000));
-                $nonce     = Str::random(32);
-
-                $bodyArray = [
-                    'merchantTradeNo' => $merchantTradeNo,
-                    'tradeType'       => 'WEB', // ¡¡REQUERIDO!! Para pagos desde navegador
-                    'productName'     => 'Plan Básico - ' . $validated['company_name'],
-                    'productDetail'   => 'Acceso completo al sistema TuConpay',
-                    'totalFee'        => number_format($this->planPriceUsd, 2, '.', ''),
-                    'currency'        => 'USDT',
-                    'goodsType'       => '01',
-                    'goodsCategory'   => '0000',
-                    // Opcional: URLs de retorno (puedes crear vistas simples success/cancel)
-                    // 'returnUrl'       => url('/payment/success'),
-                    // 'cancelUrl'       => url('/payment/cancel'),
-                ];
-
-                $body = json_encode($bodyArray);
-
-                $signature = $this->generateSignature($timestamp, $nonce, $body);
-
-                // 4. Request a Binance Pay (v2 endpoint)
-                $response = Http::withHeaders([
-                    'BinancePay-Timestamp'       => $timestamp,
-                    'BinancePay-Nonce'           => $nonce,
-                    'BinancePay-Certificate-SN'  => $this->apiKey,
-                    'BinancePay-Signature'       => $signature,
-                    'Content-Type'               => 'application/json',
-                ])->post($this->baseUrl . '/binancepay/openapi/v2/order', $bodyArray);
-
-                // Mejor manejo de errores
-                if ($response->failed()) {
-                    throw new \Exception('Error de conexión con Binance Pay: ' . $response->status());
-                }
-
-                $respJson = $response->json();
-
-                Log::info('Respuesta Completa de Binance:', $respJson);
-
-                if ($response->failed() || ($respJson['status'] ?? null) !== 'SUCCESS') {
-                    // Extraemos el detalle del error que manda Binance
-                    $binanceCode = $respJson['code'] ?? 'N/A';
-                    $binanceMsg  = $respJson['errorMessage'] ?? 'Error sin mensaje detallado';
-
-                    // Si Binance manda errores de validación específicos, suelen venir en 'data'
-                    $extraData = isset($respJson['data']) ? json_encode($respJson['data']) : '';
-
-                    throw new \Exception("Binance dice ($binanceCode): $binanceMsg $extraData");
-                }
-
-                if (($respJson['status'] ?? null) !== 'SUCCESS') {
-                    $errorMsg = $respJson['errorMessage'] ?? 'Error desconocido';
-                    $errorCode = $respJson['code'] ?? 'N/A';
-                    throw new \Exception("Binance Pay error ({$errorCode}): {$errorMsg}");
-                }
-
-                $orderData = $respJson['data'];
-
-                // 5. Guardar en tenant
-                $tenant->update([
-                    'binance_merchant_trade_no' => $merchantTradeNo,
-                    'binance_prepay_id'         => $orderData['prepayId'] ?? null,
+                    'is_active' => true
                 ]);
 
-                return [
-                    'tenant'   => $tenant,
-                    'admin'    => $admin,
-                    'payment'  => $orderData,
-                ];
+                if ($request->method === 'stripe') {
+                    return $this->handleStripe($tenant, $planData);
+                } else {
+                    return $this->handlePayPal($tenant, $planData);
+                }
             });
-
-            // Ajustamos los nombres de campos según la respuesta REAL de Binance Pay
-            return response()->json([
-                'message' => 'Registro exitoso. Completa el pago para activar tu cuenta.',
-                'data'    => [
-                    'tenant_id'    => $result['tenant']->id,
-                    'company_name' => $result['tenant']->name,
-                    'admin_email'  => $result['admin']->email,
-                    'payment'      => [
-                        // URL directa a la imagen QR (perfecta para <img>)
-                        'qr_code_url'  => $result['payment']['qrcodeLink'] ?? null,
-                        // URL del checkout de Binance (redirección directa)
-                        'checkout_url' => $result['payment']['checkoutUrl'] ?? null,
-                        // Deep link para app Binance (opcional)
-                        'deeplink'     => $result['payment']['deeplink'] ?? null,
-                        // Universal URL (funciona en web y app)
-                        'universal_url' => $result['payment']['universalUrl'] ?? null,
-                        'prepay_id'    => $result['payment']['prepayId'] ?? null,
-                    ],
-                ],
-            ], 201);
         } catch (\Exception $e) {
-            // Loguea el error completo para debug (en production quita el detalle)
-            Log::error('Registro Binance Pay fallido: ' . $e->getMessage());
-
-            return response()->json([
-                'message' => 'Error en el registro o creación de orden de pago',
-                'error'   => $e->getMessage(), // Quita esto en producción
-            ], 500);
+            Log::error("Error en registro: " . $e->getMessage());
+            return response()->json(['error' => 'No se pudo procesar el registro.'], 500);
         }
     }
 
-    public function binanceWebhook(Request $request)
+    private function handleStripe($tenant, $planData)
     {
-        $timestamp = $request->header('BinancePay-Timestamp');
-        $nonce     = $request->header('BinancePay-Nonce');
-        $signature = $request->header('BinancePay-Signature');
-        $body      = $request->getContent();
+        $stripe = new StripeClient(config('services.stripe.secret'));
 
-        if (!$timestamp || !$nonce || !$signature) {
-            return response('Missing headers', 400);
-        }
+        // 'mode' => 'subscription' crea automáticamente el cobro recurrente
+        $session = $stripe->checkout->sessions->create([
+            'payment_method_types' => ['card'],
+            'line_items' => [[
+                'price' => $planData['stripe_price_id'],
+                'quantity' => 1,
+            ]],
+            'mode' => 'subscription',
+            'success_url' => url('/payment-success?session_id={CHECKOUT_SESSION_ID}'),
+            'cancel_url' => url('/register'),
+            'client_reference_id' => (string)$tenant->id, // Para identificarlo en el Webhook
+        ]);
 
-        $expectedSignature = $this->generateSignature($timestamp, $nonce, $body);
+        $tenant->update(['external_payment_id' => $session->id]);
+        return response()->json(['url' => $session->url]);
+    }
 
-        if (!hash_equals($expectedSignature, $signature)) {
-            return response('Invalid signature', 400);
-        }
+    private function handlePayPal($tenant, $plan)
+    {
+        try {
+            $provider = new PayPalClient;
+            $provider->setApiCredentials(config('paypal'));
+            $provider->getAccessToken();
 
-        $payload = $request->json()->all();
+            // FORZAR URLS ANTES DE CREAR LA ORDEN
+            $returnUrl = "http://localhost:5173/payment-success?tenant_id={$tenant->id}";
+            $cancelUrl = "http://localhost:5173/register";
 
-        // Binance envía varios eventos, solo nos interesa el pago exitoso
-        if (($payload['bizStatus'] ?? null) === 'PAY_SUCCESS') {
-            $merchantTradeNo = $payload['merchantTradeNo'] ?? null;
+            $order = $provider->createOrder([
+                "intent" => "CAPTURE",
+                "application_context" => [
+                    "brand_name"          => "KHEPAS",
+                    "landing_page"        => "LOGIN",
+                    "user_action"         => "PAY_NOW",
+                    "return_url"          => $returnUrl,
+                    "cancel_url"          => $cancelUrl,
+                    "shipping_preference" => "NO_SHIPPING"
+                ],
+                "purchase_units" => [[
+                    "reference_id" => (string)$tenant->id,
+                    "amount" => [
+                        "currency_code" => "USD",
+                        "value" => number_format($plan['price'], 2, '.', '')
+                    ]
+                ]]
+            ]);
 
-            if ($merchantTradeNo) {
-                $tenant = Tenant::where('binance_merchant_trade_no', $merchantTradeNo)->first();
+            Log::info("PayPal Link Generado: ", ['url' => collect($order['links'])->where('rel', 'approve')->first()['href'] ?? 'N/A']);
 
-                if ($tenant && !$tenant->is_active) {
-                    $tenant->update(['is_active' => true]);
-
-                    // Opcional: enviar email de bienvenida
-                    // Mail::to($tenant->admin->email)->send(new WelcomeMail($tenant));
-                }
+            if (!isset($order['id'])) {
+                return response()->json(['error' => 'Error al crear orden'], 422);
             }
-        }
 
-        return response('OK', 200);
+            $tenant->update(['external_payment_id' => $order['id']]);
+            $approveLink = collect($order['links'])->where('rel', 'approve')->first();
+
+            return response()->json(['url' => $approveLink['href']]);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 500);
+        }
     }
 }

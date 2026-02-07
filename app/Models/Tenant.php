@@ -14,6 +14,10 @@ class Tenant extends Model
     protected $fillable = [
         'name',
         'is_active',
+        'plan_name',
+        'plan_price',
+        'payment_method',
+        'external_payment_id',
         'binance_merchant_trade_no',
         'binance_prepay_id',
     ];
