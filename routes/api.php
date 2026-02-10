@@ -28,6 +28,7 @@ use App\Http\Controllers\Api\InvestorController;
 use App\Http\Controllers\Api\LedgerEntryController;
 use App\Http\Controllers\Api\PlatformController;
 use App\Http\Controllers\Api\ProviderController;
+use App\Http\Controllers\Api\DollarPurchaseController;
 
 // Operaciones Financieras (El Núcleo)
 use App\Http\Controllers\Api\StatisticsController;
@@ -176,6 +177,10 @@ Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
     // Ruta ligera para obtener todas las tasas en el Frontend (Store)
     Route::get('rates/all', [ExchangeRateController::class, 'all'])
         ->middleware('permission:manage_exchanges');
+
+    //COMPRA-VENTA
+    Route::apiResource('dollar-purchases', DollarPurchaseController::class)
+        ->middleware('permission:manage_dollar_purchases');
 
     // CRUD de Tasas (Configuración)
     Route::apiResource('rates', ExchangeRateController::class)
