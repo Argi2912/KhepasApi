@@ -59,15 +59,58 @@ class ProviderController extends Controller
     }
 
     // --- FUNCIÓN CORREGIDA ---
-   public function addBalance(Request $request, Provider $provider)
-{
-    $request->validate(['amount' => 'required|numeric|min:0.01']);
+    public function addBalance(Request $request, Provider $provider)
+    {
+        $request->validate([
+            'amount' => 'required|numeric|min:0.01',
+            'target_account_id' => 'nullable|exists:accounts,id',
+        ]);
 
-    $this->transactionService->addBalanceToEntity($provider, $request->amount, 'USD', $request->description);
+        // Determinar moneda desde la cuenta destino si fue proporcionada
+        $currencyCode = 'USD';
+        $account = null;
+        if ($request->target_account_id) {
+            $account = \App\Models\Account::lockForUpdate()->find($request->target_account_id);
+            if ($account) {
+                $currencyCode = $account->currency_code ?? 'USD';
+            }
+        }
 
-    // 🔥 SIN ESTO, EL RESPONSE SEGUIRÁ MOSTRANDO 0 🔥
-    $provider->refresh(); 
+        $amount = (float) $request->amount;
+        $description = $request->description ?? 'Registro por pagar a proveedor';
 
-    return response()->json($provider); // Ahora llevará el available_balance actualizado
-}
+        // 1. Incrementar saldo del proveedor + crear LedgerEntry + historial
+        $this->transactionService->addBalanceToEntity(
+            $provider,
+            $amount,
+            $currencyCode,
+            $description
+        );
+
+        // 2. El dinero prestado ENTRA a la cuenta seleccionada
+        if ($account) {
+            $account->increment('balance', $amount);
+
+            // Registrar la entrada en el historial de la cuenta
+            \App\Models\InternalTransaction::create([
+                'tenant_id' => \Illuminate\Support\Facades\Auth::user()->tenant_id ?? 1,
+                'user_id' => \Illuminate\Support\Facades\Auth::id(),
+                'account_id' => $account->id,
+                'source_type' => 'account',
+                'type' => 'income',
+                'category' => 'Préstamo de Proveedor',
+                'amount' => $amount,
+                'description' => "{$description} - {$provider->name}",
+                'transaction_date' => now(),
+                'entity_type' => \App\Models\Provider::class,
+                'entity_id' => $provider->id,
+                'person_name' => $provider->name,
+                'dueño' => $account->name,
+            ]);
+        }
+
+        $provider->refresh();
+
+        return response()->json($provider);
+    }
 }

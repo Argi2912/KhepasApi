@@ -543,23 +543,22 @@ class TransactionService
             $className = get_class($entity);
 
             if ($entity instanceof \App\Models\Provider || $className === 'App\Models\Provider') {
-                // 1. Esto actualiza la columna 'available_balance' que creaste en la migración
+                // 1. Incrementar saldo del proveedor
                 $entity->increment('available_balance', $amount);
-                
-                // 2. Registramos el movimiento para el historial pero SIN crear Ledger (Deuda)
-                InternalTransaction::create([
+
+                // 2. Crear entrada en Ledger como "Por Pagar" al proveedor
+                LedgerEntry::create([
                     'tenant_id' => Auth::user()->tenant_id ?? 1,
-                    'user_id' => Auth::id(),
-                    'source_type' => 'wallet_recharge',
-                    'type' => 'info',
-                    'category' => 'Recarga de Saldo',
-                    'amount' => $amount,
-                    'description' => $description,
-                    'transaction_date' => now(),
                     'entity_type' => $className,
                     'entity_id' => $entity->id,
-                    'person_name' => $entity->name,
-                    'dueño' => 'Billetera Virtual'
+                    'type' => 'payable',
+                    'amount' => $amount,
+                    'original_amount' => $amount,
+                    'paid_amount' => 0,
+                    'status' => 'pending',
+                    'currency_code' => $currencyCode,
+                    'description' => $description ?? 'Por Pagar a Proveedor',
+                    'due_date' => now(),
                 ]);
 
                 return $entity;
