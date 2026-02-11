@@ -17,16 +17,19 @@ class EnsureTenantIsActive
         $user = Auth::guard('api')->user();
 
         if ($user) {
-            // 1. Verificar si el USUARIO fue desactivado
+            // 1. Verificar si el USUARIO fue desactivado (Mantenemos logout)
             if (!$user->is_active) {
-                Auth::guard('api')->logout(); // Destruye el token
+                Auth::guard('api')->logout();
                 return response()->json(['error' => 'Sesión cerrada: Su usuario ha sido desactivado.'], 401);
             }
 
             // 2. Verificar si el TENANT fue desactivado
+            // CAMBIO: No cerramos sesión. Devolvemos 402 Payment Required.
             if ($user->tenant && !$user->tenant->is_active) {
-                Auth::guard('api')->logout(); // Destruye el token
-                return response()->json(['error' => 'Sesión cerrada: Su organización está inactiva.'], 403);
+                return response()->json([
+                    'code' => 'TENANT_INACTIVE',
+                    'message' => 'Suscripción inactiva.'
+                ], 402); 
             }
         }
 

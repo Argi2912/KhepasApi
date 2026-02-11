@@ -40,4 +40,12 @@ return [
         'secret' => env('BINANCE_PAY_SECRET'),
         'env'    => env('BINANCE_PAY_ENV', 'test'), // 'test' para sandbox, 'live' para producción
     ],
+
+    'paypal' => [
+        'mode'      => env('PAYPAL_MODE', 'live'), // Por defecto live
+        'client_id' => env('PAYPAL_LIVE_CLIENT_ID'), // Tu variable específica
+        'secret'    => env('PAYPAL_LIVE_CLIENT_SECRET'), // Tu variable específica
+        'app_id'    => env('PAYPAL_LIVE_APP_ID'),
+        'currency'  => env('PAYPAL_CURRENCY', 'USD'),
+    ],
 ];

@@ -20,6 +20,7 @@ class Tenant extends Model
         'external_payment_id',
         'binance_merchant_trade_no',
         'binance_prepay_id',
+        
     ];
 
     /**
@@ -84,5 +85,10 @@ class Tenant extends Model
     public function platforms(): HasMany
     {
         return $this->hasMany(Platform::class);
+    }
+    public function admin()
+    {
+        // Buscamos al usuario más antiguo de esta empresa (el que se registró primero)
+        return $this->hasOne(User::class)->oldestOfMany();
     }
 }

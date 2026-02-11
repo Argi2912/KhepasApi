@@ -1,7 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\AccountController;
-
+use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\Api\SubscriptionController;
 
 /*
 |--------------------------------------------------------------------------
@@ -9,19 +10,22 @@ use App\Http\Controllers\Api\AccountController;
 |--------------------------------------------------------------------------
 */
 
-
 // Autenticación y Globales
 use App\Http\Controllers\Api\AuditLogController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\BrokerController;
+use App\Http\Controllers\Api\RegisterController;
+use App\Http\Controllers\Api\WebhookController;
 
 // Tableros y Reportes
 use App\Http\Controllers\Api\ClientController;
 use App\Http\Controllers\Api\CurrencyController;
 use App\Http\Controllers\Api\CurrencyExchangeController;
-
-// Catálogos (Bases de Datos)
 use App\Http\Controllers\Api\DashboardController;
+use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\StatisticsController;
+
+// Catálogos y Operaciones
 use App\Http\Controllers\Api\ExchangeRateController;
 use App\Http\Controllers\Api\InternalTransactionController;
 use App\Http\Controllers\Api\InvestorController;
@@ -29,21 +33,16 @@ use App\Http\Controllers\Api\LedgerEntryController;
 use App\Http\Controllers\Api\PlatformController;
 use App\Http\Controllers\Api\ProviderController;
 use App\Http\Controllers\Api\DollarPurchaseController;
+use App\Http\Controllers\Api\TransactionRequestController;
+use App\Http\Controllers\Api\DailyClosingController;
+use App\Http\Controllers\Api\EmployeeController;
+use App\Http\Controllers\Api\TransactionController;
 
-// Operaciones Financieras (El Núcleo)
-use App\Http\Controllers\Api\StatisticsController;
+// Superadmin
 use App\Http\Controllers\Api\Superadmin\ActivityLogController;
 use App\Http\Controllers\Api\Superadmin\TenantController;
 use App\Http\Controllers\Api\TenantUserController;
-use App\Http\Controllers\Api\TransactionRequestController;
-use App\Http\Controllers\Api\DailyClosingController;
-// AGREGAMOS ESTA IMPORTACIÓN QUE FALTABA
-use App\Http\Controllers\Api\EmployeeController;
-use App\Http\Controllers\Api\RegisterController;
-use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\ReportController;
-use App\Http\Controllers\Api\TransactionController;
-use App\Http\Controllers\Api\WebhookController;
+
 /*
 |--------------------------------------------------------------------------
 | 1. RUTAS PÚBLICAS
@@ -51,10 +50,8 @@ use App\Http\Controllers\Api\WebhookController;
 */
 
 Route::post('login', [AuthController::class, 'login']);
-
-
-// Registro público (sin middleware auth)
 Route::post('/register', [RegisterController::class, 'register']);
+
 Route::get('tenants/check-status/{tenant}', function ($id) {
     $tenant = \App\Models\Tenant::find($id);
     return response()->json(['is_active' => $tenant->is_active]);
@@ -73,24 +70,37 @@ Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'supe
     Route::get('/stats', [TenantController::class, 'dashboardStats']);
     Route::apiResource('tenants', TenantController::class);
     Route::patch('/tenants/{tenant}/toggle', [TenantController::class, 'toggleStatus']);
-
     Route::get('/logs', [ActivityLogController::class, 'index']);
 });
 
 /*
 |--------------------------------------------------------------------------
-| 3. RUTAS DEL TENANT (SISTEMA OPERATIVO)
+| 3. RUTAS DE USUARIO (LIBRES DE BLOQUEO)
 |--------------------------------------------------------------------------
+| Estas rutas DEBEN estar fuera del middleware 'tenant.active' para que
+| el usuario pueda consultar sus datos y hacer logout aunque deba dinero.
+*/
+Route::group(['middleware' => ['auth:api']], function () {
+    Route::post('logout', [AuthController::class, 'logout']);
+    Route::get('me', [AuthController::class, 'me']);
+    Route::post('refresh', [AuthController::class, 'refresh']);
+
+    // --- RUTAS DE PAGO DE SUSCRIPCIÓN (NUEVO) ---
+    Route::post('/subscription/paypal', [SubscriptionController::class, 'payWithPaypal']);
+    Route::post('/subscription/capture-registration', [SubscriptionController::class, 'captureRegistrationPayment']);
+});
+
+
+/*
+|--------------------------------------------------------------------------
+| 4. RUTAS DEL TENANT (PROTEGIDAS POR PAGO)
+|--------------------------------------------------------------------------
+| Si la empresa está inactiva, todo lo de abajo dará error 402.
 */
 Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
 
     // Ruta para el Daily Closing
     Route::get('/daily-closing', [DailyClosingController::class, 'index']);
-
-    // --- A. Autenticación y Perfil ---
-    Route::post('logout', [AuthController::class, 'logout']);
-    Route::get('me', [AuthController::class, 'me']);
-    Route::post('refresh', [AuthController::class, 'refresh']);
 
     // --- B. Dashboard y Métricas ---
     Route::get('dashboard/summary', [DashboardController::class, 'getSummary'])
@@ -102,124 +112,65 @@ Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
     Route::get('statistics/providers', [StatisticsController::class, 'getProviderReport'])
         ->middleware('permission:view_statistics');
 
-    // REPORTES (JSON y DESCARGAS)
-    // Reportes
-    Route::get('/reports/data', [App\Http\Controllers\Api\ReportController::class, 'getReportData']); // Nueva ruta para tablas
-    Route::get('/reports/download', [App\Http\Controllers\Api\ReportController::class, 'download']);
-    Route::get('/reports/profit-matrix', [App\Http\Controllers\Api\ReportController::class, 'profitMatrix']);
-
-    // [NUEVO] Ruta única para descargar cualquier reporte (Excel/PDF)
-    Route::get('/reports/download', [App\Http\Controllers\Api\ReportController::class, 'download']);
+    // REPORTES
+    Route::get('/reports/data', [ReportController::class, 'getReportData']);
+    Route::get('/reports/download', [ReportController::class, 'download']);
+    Route::get('/reports/profit-matrix', [ReportController::class, 'profitMatrix']);
     Route::get('/reports/receipt/{id}', [ReportController::class, 'downloadTransactionReceipt']);
 
+    Route::get('statistics/clients', [StatisticsController::class, 'getClientReport'])->middleware('permission:view_statistics');
+    Route::get('statistics/platforms', [StatisticsController::class, 'getPlatformReport'])->middleware('permission:view_statistics');
+    Route::get('statistics/brokers', [StatisticsController::class, 'getBrokerReport'])->middleware('permission:view_statistics');
+    Route::get('statistics/investors', [StatisticsController::class, 'getInvestorReport'])->middleware('permission:view_statistics');
 
-    // Opcional: Agrega las rutas para el resto de los reportes para ser consistentes
-    Route::get('statistics/clients', [StatisticsController::class, 'getClientReport'])
-        ->middleware('permission:view_statistics');
-
-    Route::get('statistics/platforms', [StatisticsController::class, 'getPlatformReport'])
-        ->middleware('permission:view_statistics');
-
-    Route::get('statistics/brokers', [StatisticsController::class, 'getBrokerReport'])
-        ->middleware('permission:view_statistics');
-
-    Route::get('statistics/investors', [StatisticsController::class, 'getInvestorReport'])
-        ->middleware('permission:view_statistics');
-
-    Route::apiResource('employees', \App\Http\Controllers\Api\EmployeeController::class);
-
-    // AQUÍ ESTÁ LA RUTA CORRECTA (La dejé aquí y borré la de abajo)
+    // Empleados
+    Route::apiResource('employees', EmployeeController::class);
     Route::post('/employees/process-payroll', [EmployeeController::class, 'processPayroll']);
 
     // --- C. Catálogos y Recursos ---
-    Route::apiResource('clients', ClientController::class)
-        ->middleware('permission:manage_clients');
-
-    // [NUEVO] Ruta para agregar saldo a Proveedor (Antes del resource)
-    Route::post('providers/{provider}/balance', [ProviderController::class, 'addBalance'])
-        ->middleware('permission:manage_clients');
-
-    Route::apiResource('providers', ProviderController::class)
-        ->middleware('permission:manage_clients');
-
-    Route::apiResource('brokers', BrokerController::class)
-        ->middleware('permission:manage_users');
-
-    Route::apiResource('accounts', AccountController::class)
-        ->middleware('permission:manage_exchanges');
-
-    Route::apiResource('platforms', PlatformController::class)
-        ->middleware('permission:manage_platforms');
-
-    Route::apiResource('currencies', CurrencyController::class)
-        ->middleware('permission:manage_exchanges');
+    Route::apiResource('clients', ClientController::class)->middleware('permission:manage_clients');
+    Route::post('providers/{provider}/balance', [ProviderController::class, 'addBalance'])->middleware('permission:manage_clients');
+    Route::apiResource('providers', ProviderController::class)->middleware('permission:manage_clients');
+    Route::apiResource('brokers', BrokerController::class)->middleware('permission:manage_users');
+    Route::apiResource('accounts', AccountController::class)->middleware('permission:manage_exchanges');
+    Route::apiResource('platforms', PlatformController::class)->middleware('permission:manage_platforms');
+    Route::apiResource('currencies', CurrencyController::class)->middleware('permission:manage_exchanges');
 
     // --- D. MÓDULOS FINANCIEROS ---
-
-    // 1. Solicitudes (Buzón)
     Route::apiResource('transactions/requests', TransactionRequestController::class)
         ->only(['index', 'store', 'update'])
         ->middleware('permission:manage_transaction_requests');
     Route::patch('/transactions/exchanges/{exchange}/deliver', [CurrencyExchangeController::class, 'markDelivered']);
 
-    // 2. Transacciones Internas (Caja)
     Route::apiResource('transactions/internal', InternalTransactionController::class)
         ->only(['index', 'store', 'show'])
         ->middleware('permission:manage_internal_transactions');
 
-    // 3. Intercambios de Divisa (Motor Unificado)
     Route::apiResource('transactions/exchanges', CurrencyExchangeController::class)
         ->only(['index', 'show', 'store'])
         ->middleware('permission:manage_exchanges');
 
     // --- E. Lógica de Negocio (Tasas) ---
-
-    // Ruta ligera para obtener todas las tasas en el Frontend (Store)
-    Route::get('rates/all', [ExchangeRateController::class, 'all'])
-        ->middleware('permission:manage_exchanges');
-
-    //COMPRA-VENTA
-    Route::apiResource('dollar-purchases', DollarPurchaseController::class)
-        ->middleware('permission:manage_dollar_purchases');
-
-    // CRUD de Tasas (Configuración)
+    Route::get('rates/all', [ExchangeRateController::class, 'all'])->middleware('permission:manage_exchanges');
+    Route::apiResource('dollar-purchases', DollarPurchaseController::class)->middleware('permission:manage_dollar_purchases');
     Route::apiResource('rates', ExchangeRateController::class)
         ->only(['index', 'show', 'store', 'update'])
         ->middleware('permission:manage_exchanges');
 
-    // --- F. Contabilidad y Auditoría (CORREGIDO Y ORDENADO) ---
-
-    // 1. Resumen de Cuentas (Tarjetas Rojas/Verdes) - IMPORTANTE: Debe ir antes del resource
+    // --- F. Contabilidad y Auditoría ---
     Route::get('ledger/summary', [LedgerEntryController::class, 'summary']);
-
-    // 2. [NUEVO] VISTA AGRUPADA (El fix del error 405)
-    // Al estar aquí, Laravel la encuentra antes de confundirla con un ID.
     Route::get('ledger/grouped', [LedgerEntryController::class, 'groupedPayables']);
-
-    // 3. Pagar Deuda
     Route::post('ledger/{ledger_entry}/pay', [LedgerEntryController::class, 'pay']);
+    Route::apiResource('ledger', LedgerEntryController::class)->only(['index', 'store', 'update']);
 
-    // 4. Listado General
-    Route::apiResource('ledger', LedgerEntryController::class)
-        ->only(['index', 'store', 'update']);
+    Route::get('audit-logs', [AuditLogController::class, 'index'])->middleware('permission:view_database_history');
 
-    // 5. Historial
-    Route::get('audit-logs', [AuditLogController::class, 'index'])
-        ->middleware('permission:view_database_history');
-
-    // [NUEVO] Ruta para agregar saldo a Inversionista (Antes del resource)
     Route::post('investors/{investor}/balance', [InvestorController::class, 'addBalance']);
-
     Route::apiResource('investors', InvestorController::class);
-
-    //provider
 
     Route::post('/transactions/add-balance', [TransactionController::class, 'addBalance']);
 
     // --- G. Gestión de Usuarios ---
-    Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])
-        ->middleware('permission:manage_users');
-
-    Route::apiResource('users', TenantUserController::class)
-        ->middleware('permission:manage_users');
+    Route::get('users/available-roles', [TenantUserController::class, 'getAvailableRoles'])->middleware('permission:manage_users');
+    Route::apiResource('users', TenantUserController::class)->middleware('permission:manage_users');
 });
