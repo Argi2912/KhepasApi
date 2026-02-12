@@ -3,75 +3,80 @@
 namespace App\Models;
 
 use App\Models\Traits\BelongsToTenant;
-use App\Models\Traits\Filterable; // <-- 1. IMPORTAR
+use App\Models\Traits\Filterable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
-
-// <-- 2. IMPORTAR
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class LedgerEntry extends Model
 {
     use HasFactory, BelongsToTenant, Filterable;
 
-    /**
-     * @var array<int, string>
-     */
     protected $fillable = [
         'tenant_id',
+        'user_id',
         'description',
         'amount',
-        'currency_code',
-        'type',        // 'payable' o 'receivable'
-        'status',      // 'pending' o 'paid'
-        'entity_type', // A quién: Provider, Broker, Client
+        'original_amount',
+        'paid_amount',
+        'pending_amount',
+        'currency_id',
+        'currency_code', // ✅ CRÍTICO: Esto permite guardar el texto "VES", "USD"
+        'type',
+        'status',
+        'entity_type',
         'entity_id',
-        'transaction_type', // Qué lo originó: DollarPurchase, CurrencyExchange
+        'transaction_type',
         'transaction_id',
         'due_date',
     ];
 
-    /**
-     * @var array<string, string>
-     */
     protected $casts = [
-        'amount'   => 'decimal:2',
-        'due_date' => 'date',
+        'amount'          => 'decimal:2',
+        'original_amount' => 'decimal:2',
+        'paid_amount'     => 'decimal:2',
+        'pending_amount'  => 'decimal:2',
+        'due_date'        => 'date',
     ];
+
+    // --- RELACIONES ---
 
     public function payments()
     {
         return $this->hasMany(LedgerPayment::class);
     }
 
-    /**
-     * La entidad relacionada (el Proveedor, Corredor, etc. a quien se le debe)
-     * @return \Illuminate\Database\Eloquent\Relations\MorphTo
-     */
     public function entity(): MorphTo
     {
         return $this->morphTo();
     }
 
-    /**
-     * La transacción que originó esta entrada contable
-     * @return \Illuminate\Database\Eloquent\Relations\MorphTo
-     */
     public function transaction(): MorphTo
     {
         return $this->morphTo();
     }
 
-    // Accessor para monto pendiente (calculado)
-    public function getPendingAmountAttribute()
+    public function currency(): BelongsTo
     {
+        return $this->belongsTo(Currency::class);
+    }
+
+    // --- ACCESORES ---
+
+    public function getPendingAmountAttribute($value)
+    {
+        if (!is_null($value)) {
+            return $value;
+        }
         return $this->original_amount - $this->paid_amount;
     }
 
-    // Actualizar status automáticamente
     public function getStatusAttribute($value)
     {
+        if ($value) return $value;
+
         if ($this->paid_amount >= $this->original_amount) {
             return 'paid';
         }
@@ -81,42 +86,46 @@ class LedgerEntry extends Model
         return 'pending';
     }
 
-    /**
-     * Filtra por status (pending, paid)
-     */
+    // --- SCOPES ---
+
     public function scopeStatus(Builder $query, $status): Builder
     {
         return $query->where('status', $status);
     }
 
-    /**
-     * Filtra por type (payable, receivable)
-     */
     public function scopeType(Builder $query, $type): Builder
     {
         return $query->where('type', $type);
     }
 
-    /**
-     * Filtra por la entidad polimórfica (ej. Broker con ID 5)
-     * @param  \Illuminate\Database\Eloquent\Builder  $query
-     * @param  string  $entityType (ej. 'App\Models\Broker')
-     * @param  int  $entityId
-     * @return \Illuminate\Database\Eloquent\Builder
-     */
     public function scopeEntity(Builder $query, $entityType, $entityId): Builder
     {
         return $query->where('entity_type', $entityType)
             ->where('entity_id', $entityId);
     }
 
+    /**
+     * ✅ CORRECCIÓN DEFINITIVA: Automatización de Datos
+     * Esto se ejecuta justo antes de guardar en la base de datos.
+     */
     protected static function booted()
     {
         static::creating(function ($entry) {
+            // 1. Calcular montos pendientes automáticamente
             if (is_null($entry->original_amount)) {
                 $entry->original_amount = $entry->amount;
             }
-            $entry->pending_amount = $entry->original_amount;
+            
+            $entry->pending_amount = $entry->original_amount - ($entry->paid_amount ?? 0);
+
+            // 2. 🔥 AUTO-ASIGNAR EL CÓDIGO DE MONEDA 🔥
+            // Si nos dieron el ID (ej: 7) pero no el Código (ej: VES), lo buscamos y rellenamos.
+            if (!empty($entry->currency_id) && empty($entry->currency_code)) {
+                $currency = \App\Models\Currency::find($entry->currency_id);
+                if ($currency) {
+                    $entry->currency_code = $currency->code;
+                }
+            }
         });
     }
 }

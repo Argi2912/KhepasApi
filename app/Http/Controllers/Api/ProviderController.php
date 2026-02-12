@@ -4,8 +4,13 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Provider;
+use App\Models\Account;
+use App\Models\InternalTransaction;
+use App\Models\LedgerEntry; // <--- IMPORTANTE
 use App\Services\TransactionService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth;
 
 class ProviderController extends Controller
 {
@@ -28,15 +33,19 @@ class ProviderController extends Controller
             $query->search($request->search);
         }
 
-        // Asegúrate de que aquí no estés usando un "Resource" que oculte el dato.
-        // Si devuelves el modelo directo así, Laravel enviará todas las columnas visibles.
+        // 'current_balance' se calcula automáticamente gracias a $appends en el modelo
         return $query->latest()->paginate(15)->withQueryString();
     }
 
     public function store(Request $request)
     {
-        $data = $request->validate(['name' => 'required|string|max:255', 'contact_person' => 'nullable', 'email' => 'nullable', 'phone' => 'nullable']);
-        // Inicializamos el balance en 0 por seguridad
+        $data = $request->validate([
+            'name' => 'required|string|max:255', 
+            'contact_person' => 'nullable', 
+            'email' => 'nullable', 
+            'phone' => 'nullable'
+        ]);
+        
         $data['available_balance'] = 0;
         return response()->json(Provider::create($data), 201);
     }
@@ -58,59 +67,90 @@ class ProviderController extends Controller
         return response()->noContent();
     }
 
-    // --- FUNCIÓN CORREGIDA ---
+    /**
+     * Registra Operación Compuesta:
+     * 1. Recibe dinero en Caja (Activo)
+     * 2. Registra Deuda en Libro Mayor (Pasivo/Por Pagar)
+     */
     public function addBalance(Request $request, Provider $provider)
     {
         $request->validate([
-            'amount' => 'required|numeric|min:0.01',
-            'target_account_id' => 'nullable|exists:accounts,id',
+            'amount_received'   => 'required|numeric|min:0.01',
+            'target_account_id' => 'required|exists:accounts,id',
+            'debt_amount'       => 'required|numeric|min:0.01',
+            'debt_currency_id'  => 'required|exists:currencies,id',
+            'transaction_date'  => 'required|date',
+            'description'       => 'nullable|string',
+            'interest_percentage' => 'nullable|numeric'
         ]);
 
-        // Determinar moneda desde la cuenta destino si fue proporcionada
-        $currencyCode = 'USD';
-        $account = null;
-        if ($request->target_account_id) {
-            $account = \App\Models\Account::lockForUpdate()->find($request->target_account_id);
-            if ($account) {
-                $currencyCode = $account->currency_code ?? 'USD';
-            }
-        }
+        DB::beginTransaction();
+        try {
+            $user = Auth::user();
+            $tenantId = $user->tenant_id ?? 1;
 
-        $amount = (float) $request->amount;
-        $description = $request->description ?? 'Registro por pagar a proveedor';
+            // =========================================================
+            // 1. CAJA: ENTRADA DE DINERO (Aumenta Saldo Cuenta)
+            // =========================================================
+            $account = Account::lockForUpdate()->findOrFail($request->target_account_id);
+            $account->increment('balance', $request->amount_received);
 
-        // 1. Incrementar saldo del proveedor + crear LedgerEntry + historial
-        $this->transactionService->addBalanceToEntity(
-            $provider,
-            $amount,
-            $currencyCode,
-            $description
-        );
-
-        // 2. El dinero prestado ENTRA a la cuenta seleccionada
-        if ($account) {
-            $account->increment('balance', $amount);
-
-            // Registrar la entrada en el historial de la cuenta
-            \App\Models\InternalTransaction::create([
-                'tenant_id' => \Illuminate\Support\Facades\Auth::user()->tenant_id ?? 1,
-                'user_id' => \Illuminate\Support\Facades\Auth::id(),
-                'account_id' => $account->id,
-                'source_type' => 'account',
-                'type' => 'income',
-                'category' => 'Préstamo de Proveedor',
-                'amount' => $amount,
-                'description' => "{$description} - {$provider->name}",
-                'transaction_date' => now(),
-                'entity_type' => \App\Models\Provider::class,
-                'entity_id' => $provider->id,
-                'person_name' => $provider->name,
-                'dueño' => $account->name,
+            // Historial Caja
+            InternalTransaction::create([
+                'tenant_id'        => $tenantId,
+                'user_id'          => $user->id,
+                'account_id'       => $account->id,
+                'currency_id'      => $account->currency_id,
+                'amount'           => $request->amount_received,
+                'type'             => 'income', 
+                'category'         => 'Préstamo de Proveedor',
+                'description'      => "Entrada por financiamiento: {$request->description}",
+                'transaction_date' => $request->transaction_date,
+                'entity_type'      => Provider::class,
+                'entity_id'        => $provider->id,
+                'person_name'      => $provider->name,
             ]);
+
+            // =========================================================
+            // 2. PROVEEDOR: REGISTRO DE DEUDA (Por Pagar)
+            // =========================================================
+            
+            // A. Historial del Proveedor (Visual)
+            $provider->internalTransactions()->create([
+                'tenant_id'        => $tenantId,
+                'user_id'          => $user->id,
+                'account_id'       => null,
+                'currency_id'      => $request->debt_currency_id,
+                'amount'           => $request->debt_amount,
+                'type'             => 'income', // Deuda a favor del proveedor
+                'category'         => 'Deuda con Proveedor',
+                'description'      => "{$request->description} (Recibido: {$request->amount_received}, Interés: {$request->interest_percentage}%)",
+                'transaction_date' => $request->transaction_date,
+            ]);
+
+            // B. LIBRO MAYOR (LedgerEntry) - ¡ESTO ACTUALIZA EL SALDO!
+            LedgerEntry::create([
+                'tenant_id'        => $tenantId,
+                'user_id'          => $user->id,
+                'entity_type'      => Provider::class,
+                'entity_id'        => $provider->id,
+                'type'             => 'payable', // Tipo 'payable' suma al saldo "Por Pagar"
+                'status'           => 'pending',
+                'currency_id'      => $request->debt_currency_id,
+                'amount'           => $request->debt_amount,
+                'paid_amount'      => 0,
+                'description'      => "Financiamiento: " . $request->description,
+                'transaction_date' => $request->transaction_date,
+                'due_date'         => null // Opcional: podrías pedir fecha de vencimiento
+            ]);
+
+            DB::commit();
+            
+            return response()->json(['message' => 'Financiamiento y Deuda registrados correctamente']);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Error: ' . $e->getMessage()], 500);
         }
-
-        $provider->refresh();
-
-        return response()->json($provider);
     }
 }

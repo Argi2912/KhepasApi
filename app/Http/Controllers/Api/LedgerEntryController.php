@@ -10,7 +10,6 @@ use App\Services\TransactionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
-
 class LedgerEntryController extends Controller
 {
     protected $transactionService;
@@ -20,33 +19,48 @@ class LedgerEntryController extends Controller
         $this->transactionService = $transactionService;
     }
 
-    // 1. VISTA DETALLADA (HISTORIAL DE MOVIMIENTOS)
+    /**
+     * 1. VISTA DETALLADA (LISTA DE DEUDAS/COBROS)
+     */
     public function index(Request $request)
     {
+        // Cargamos 'currency' para asegurar que el Frontend reciba el símbolo correcto (Bs, $, €)
         $query = LedgerEntry::query()
-            ->with(['entity', 'transaction']);
+            ->with(['entity', 'transaction', 'currency']);
 
-        // Filtros Básicos
-        $query->when($request->type, fn($q, $t) => $q->where('type', $t));
-        $query->when($request->status, fn($q, $s) => $q->where('status', $s));
+        // --- FILTROS ---
 
-        // --- CORRECCIÓN CLAVE PARA EL ACORDEÓN ---
-        // Ahora el backend sí escucha cuando le pides datos de una sola persona
+        // 1. Tipo (Por Cobrar vs Por Pagar)
+        if ($request->has('type')) {
+            $query->where('type', $request->type);
+            // ✅ CORRECCIÓN: YA NO FILTRAMOS transaction_type.
+            // Ahora aparecerán las comisiones automáticas si te las deben.
+        }
+
+        // 2. Estado (Pendiente / Pagado / Parcial)
+        if ($request->has('status')) {
+             $query->where('status', $request->status);
+        }
+
+        // 3. Ocultar Pagados (Filtro Típico de "Por Cobrar")
+        // Si el frontend envía include_paid=false, solo mostramos lo que se debe.
+        if ($request->has('include_paid') && $request->include_paid == 'false') {
+            $query->where('status', '!=', 'paid');
+        }
+
+        // 4. Filtros Específicos (Para ver historial de un solo cliente/proveedor)
         $query->when($request->entity_type, fn($q, $t) => $q->where('entity_type', $t)); 
         $query->when($request->entity_id, fn($q, $id) => $q->where('entity_id', $id));   
         $query->when($request->currency_code, fn($q, $c) => $q->where('currency_code', $c)); 
-        // ------------------------------------------
 
-        // Búsqueda Avanzada
+        // 5. Búsqueda Avanzada
         $query->when($request->search, function ($q, $search) {
             $q->where(function ($q) use ($search) {
                 $q->where('description', 'like', "%{$search}%")
-                
                     ->orWhereHasMorph('transaction', [
                         \App\Models\CurrencyExchange::class,
                         \App\Models\InternalTransaction::class
                     ], function ($q, $type) use ($search) {
-                        
                         if ($type === \App\Models\CurrencyExchange::class) {
                             $q->where('number', 'like', "%{$search}%");
                         } 
@@ -55,7 +69,6 @@ class LedgerEntryController extends Controller
                               ->orWhere('description', 'like', "%{$search}%");
                         }
                     })
-
                     ->orWhereHasMorph('entity', [
                         \App\Models\Employee::class,
                         \App\Models\Broker::class,
@@ -72,49 +85,53 @@ class LedgerEntryController extends Controller
             });
         });
 
+        // 6. Fechas
         $query->when($request->start_date, fn($q, $date) => $q->whereDate('created_at', '>=', $date));
         $query->when($request->end_date, fn($q, $date) => $q->whereDate('created_at', '<=', $date));
 
-        return $query->latest()->paginate(15)->withQueryString();
+        return $query->latest()->paginate($request->per_page ?? 15)->withQueryString();
     }
 
     /**
-     * =========================================================================
-     * NUEVO MÉTODO: VISTA AGRUPADA (TOTALES POR PERSONA)
-     * =========================================================================
-     * Este método suma todas las deudas separadas de un mismo inversor/proveedor
-     * y te devuelve una sola línea con el total que debes.
+     * 2. VISTA AGRUPADA (TOTALES POR PERSONA)
+     * Suma todo lo que debe "Juan", "Pedro", etc.
      */
     public function groupedPayables(Request $request)
     {
-        // 1. Filtramos solo DEUDAS (payable) que NO estén pagadas al 100%
-        $query = LedgerEntry::where('type', 'payable')
+        // Determinamos si buscamos Deudas (payable) o Cobros (receivable)
+        $type = $request->type ?? 'payable';
+
+        // Filtramos lo que NO esté pagado totalmente
+        $query = LedgerEntry::where('type', $type)
             ->where('status', '!=', 'paid');
 
-        // Filtro opcional por moneda (para no mezclar Peras con Manzanas)
+        // ✅ CORRECCIÓN: Aquí también quitamos el whereNull('transaction_type')
+        // Para que las comisiones se sumen al total de la deuda del cliente.
+
+        // Filtro opcional por moneda
         $query->when($request->currency_code, fn($q, $c) => $q->where('currency_code', $c));
         
-        // 2. Agrupamos por Entidad (Quién) y Moneda (Qué)
         $grouped = $query->select(
                 'entity_type',
                 'entity_id',
                 'currency_code',
-                DB::raw('SUM(amount) as total_original_debt'),           // Cuánto pediste prestado en total histórico
-                DB::raw('SUM(paid_amount) as total_paid'),               // Cuánto has abonado en total histórico
-                DB::raw('SUM(amount - paid_amount) as total_pending'),   // 🟢 LO QUE DEBES HOY (Saldo vivo)
-                DB::raw('COUNT(id) as movements_count'),                 // Cuántos depósitos/movimientos forman esta deuda
-                DB::raw('MIN(due_date) as oldest_due_date')              // Fecha del movimiento más antiguo
+                DB::raw('SUM(amount) as total_original_debt'),
+                DB::raw('SUM(paid_amount) as total_paid'),
+                DB::raw('SUM(amount - paid_amount) as total_pending'), // Lo que debe hoy
+                DB::raw('COUNT(id) as movements_count'),
+                DB::raw('MIN(due_date) as oldest_due_date')
             )
             ->groupBy('entity_type', 'entity_id', 'currency_code')
-            ->with('entity') // Carga el nombre del Inversor/Proveedor
-            ->orderByDesc('total_pending') // Ordenar: Los que más se les debe primero
+            ->with('entity')
+            ->orderByDesc('total_pending')
             ->paginate(15);
 
         return response()->json($grouped);
     }
 
-    // EL RESTO DEL CÓDIGO PERMANECE INTACTO
-
+    /**
+     * 3. CREAR MANUALMENTE (Préstamo / Deuda)
+     */
     public function store(Request $request)
     {
         $validated = $request->validate([
@@ -127,43 +144,46 @@ class LedgerEntryController extends Controller
             'due_date'      => 'nullable|date',
         ]);
 
+        // Buscamos el ID de la moneda para guardar ambos datos (ID y Código)
+        $currency = \App\Models\Currency::where('code', $validated['currency_code'])->first();
+
         $entry = LedgerEntry::create([
             'tenant_id'       => auth()->user()->tenant_id,
             'description'     => $validated['description'],
             'amount'          => $validated['amount'],
             'original_amount' => $validated['amount'],
             'currency_code'   => $validated['currency_code'],
+            'currency_id'     => $currency ? $currency->id : null,
             'type'            => $validated['type'],
             'entity_type'     => $validated['entity_type'],
             'entity_id'       => $validated['entity_id'],
             'due_date'        => $validated['due_date'] ?? null,
+            'status'          => 'pending',
+            'paid_amount'     => 0
         ]);
 
         return response()->json($entry->load('entity'), 201);
     }
 
+    /**
+     * 4. RESUMEN / DASHBOARD
+     */
     public function summary()
     {
-        // Total Por Pagar (Original)
+        // Total Por Pagar (Incluye manuales y automáticas pendientes)
         $payable = LedgerEntry::where('type', 'payable')
             ->where('status', 'pending')
-            ->sum('amount');
+            ->sum(DB::raw('amount - paid_amount'));
 
-        // Total Por Cobrar (Original)
+        // Total Por Cobrar (Incluye manuales y automáticas pendientes)
         $receivableLedger = LedgerEntry::where('type', 'receivable')
             ->where('status', 'pending')
-            ->sum('amount');
-
-        // Sumar Compras Pendientes
-        $receivablePurchases = CurrencyExchange::where('status', 'pending')
-            ->whereNotNull('buy_rate')
-            ->where('buy_rate', '>', 0)
-            ->sum('amount_received');
+            ->sum(DB::raw('amount - paid_amount'));
 
         // Top 5 Acreedores
         $topPayables = LedgerEntry::where('type', 'payable')
             ->where('status', 'pending')
-            ->select('entity_type', 'entity_id', DB::raw('SUM(amount) as total'))
+            ->select('entity_type', 'entity_id', DB::raw('SUM(amount - paid_amount) as total'))
             ->groupBy('entity_type', 'entity_id')
             ->with('entity')
             ->orderByDesc('total')
@@ -172,11 +192,14 @@ class LedgerEntryController extends Controller
 
         return response()->json([
             'payable_total'    => $payable,
-            'receivable_total' => $receivableLedger + $receivablePurchases,
+            'receivable_total' => $receivableLedger, // Ahora incluye todo lo pendiente real
             'top_debts'        => $topPayables,
         ]);
     }
 
+    /**
+     * 5. REGISTRAR PAGO (ABONO)
+     */
     public function pay(Request $request, LedgerEntry $ledgerEntry)
     {
         $request->validate([
@@ -185,9 +208,9 @@ class LedgerEntryController extends Controller
             'description' => 'nullable|string|max:500',
         ]);
 
-        // Validar compatibilidad de Divisas
         $account = Account::findOrFail($request->account_id);
 
+        // Validación de moneda estricta
         if ($account->currency_code !== $ledgerEntry->currency_code) {
             return response()->json([
                 'message' => "Error de Divisa: La deuda es en {$ledgerEntry->currency_code} pero intentas pagar con una cuenta en {$account->currency_code}."

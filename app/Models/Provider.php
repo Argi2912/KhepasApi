@@ -2,84 +2,75 @@
 
 namespace App\Models;
 
-use App\Models\Traits\BelongsToTenant;
-use App\Models\Traits\Filterable;
+use App\Models\Traits\{BelongsToTenant, Filterable};
+use Illuminate\Database\Eloquent\{Model, Builder};
+use Illuminate\Database\Eloquent\Relations\{HasMany, MorphMany};
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\MorphMany;
-use Illuminate\Database\Eloquent\Builder;
-use App\Models\InternalTransaction;
+use Illuminate\Support\Facades\DB;
 
 class Provider extends Model
 {
     use HasFactory, BelongsToTenant, Filterable;
 
-    // 1. AGREGA 'available_balance' AQUÍ
-    protected $fillable = [
-        'tenant_id', 
-        'name', 
-        'contact_person', 
-        'email', 
-        'phone', 
-        'available_balance', // <--- IMPORTANTE: Permite guardar el saldo de la billetera
-        'is_active'
-    ];
+    protected $fillable = ['tenant_id', 'name', 'contact_person', 'email', 'phone', 'available_balance', 'is_active'];
+    
+    // Agregamos 'balances' para que el frontend lo reciba
+    protected $appends = ['current_balance', 'balances'];
 
-    // 2. QUITA 'available_balance' DE AQUÍ (Ya es una columna real, no calculada)
-    protected $appends = ['current_balance'];
+    protected $casts = ['available_balance' => 'float', 'is_active' => 'boolean'];
 
-    protected $casts = [
-        'available_balance' => 'float', // Asegura que siempre se lea como número
-        'is_active' => 'boolean'
-    ];
+    public function internalTransactions(): MorphMany
+    {
+        return $this->morphMany(InternalTransaction::class, 'entity');
+    }
 
     public function ledgerEntries(): MorphMany
     {
         return $this->morphMany(LedgerEntry::class, 'entity');
     }
 
-    public function transactions()
-    {
-        return $this->hasMany(InternalTransaction::class, 'account_id')
-            ->where('source_type', 'provider');
-    }
-
-    // --- LÓGICA DE NEGOCIO ---
-
     /**
-     * DEUDA TOTAL (Current Balance)
-     * Esto sigue igual: Suma cuánto le debemos realmente (dinero que ya movimos a nuestro banco).
+     * ✅ ESTA ES LA CLAVE: Agrupa los saldos por moneda
      */
-    public function getCurrentBalanceAttribute()
+    // En App\Models\Provider.php
+
+    public function getBalancesAttribute()
     {
-        // Sumamos lo pendiente en Ledgers de tipo 'payable' (Deuda real)
         return $this->ledgerEntries()
-            ->where('type', 'payable')
-            ->where('status', '!=', 'paid') // Solo sumamos lo que no está pagado
+            ->where('type', 'payable')       // Solo lo que es deuda
+            ->where('status', '!=', 'paid')  // Solo lo que no se ha pagado
+            
+            // ✅ EL FILTRO MÁGICO: 
+            // Esto elimina todo lo que venga de Operaciones/Cambios automáticos.
+            // Solo deja lo que se creó manualmente (donde no hay transaction_type).
+            ->whereNull('transaction_type') 
+            
+            ->select('currency_id', \Illuminate\Support\Facades\DB::raw('SUM(amount - paid_amount) as total'))
+            ->groupBy('currency_id')
+            ->with('currency')
             ->get()
-            ->sum(function($entry) {
-                return $entry->amount - $entry->paid_amount;
+            ->map(function ($item) {
+                return [
+                    'currency_code' => $item->currency->code ?? '???',
+                    'symbol'        => $item->currency->symbol ?? '$',
+                    'amount'        => (float) $item->total
+                ];
             });
     }
 
-    /**
-     * ❌ ELIMINADO: getAvailableBalanceAttribute
-     * * Razón: Ahora 'available_balance' es una columna real en la base de datos.
-     * Si dejabas esta función, el sistema ignoraba la columna y trataba de calcular 
-     * el saldo sumando facturas viejas, lo cual daba error o negativo.
-     * * Ahora Laravel leerá directamente la columna 'available_balance'.
-     */
-    
-    // ... (Resto de relaciones y scopes sin cambios) ...
-    public function currencyExchanges(): HasMany { return $this->hasMany(CurrencyExchange::class); }
-    public function dollarPurchases(): HasMany { return $this->hasMany(DollarPurchase::class); }
-    
+    // Mantenemos este por compatibilidad, pero ya no lo usaremos en la tabla principal
+    public function getCurrentBalanceAttribute()
+    {
+        return $this->ledgerEntries()
+            ->where('type', 'payable')
+            ->where('status', '!=', 'paid')
+            ->get()
+            ->sum(fn($e) => $e->amount - $e->paid_amount);
+    }
+
     public function scopeSearch(Builder $query, $term): Builder
     {
         $term = "%{$term}%";
-        return $query->where(function ($q) use ($term) {
-            $q->where('name', 'like', $term)->orWhere('contact_person', 'like', $term);
-        });
+        return $query->where('name', 'like', $term)->orWhere('contact_person', 'like', $term);
     }
 }
