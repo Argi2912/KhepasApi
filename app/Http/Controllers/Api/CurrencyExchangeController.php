@@ -3,11 +3,12 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreCurrencyExchangeRequest; // 👈 Importamos el FormRequest creado
 use App\Models\CurrencyExchange;
 use App\Services\TransactionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Log;
 
 class CurrencyExchangeController extends Controller
 {
@@ -20,6 +21,7 @@ class CurrencyExchangeController extends Controller
 
     public function index(Request $request)
     {
+        // Validación ligera para filtros de búsqueda
         $request->validate([
             'client_id'     => 'nullable|integer',
             'broker_id'     => 'nullable|integer',
@@ -36,7 +38,7 @@ class CurrencyExchangeController extends Controller
                 'adminUser:id,name',
                 'fromAccount:id,name,currency_code',
                 'toAccount:id,name,currency_code',
-                'investor:id,name,alias', // Cargar datos del inversionista si existe
+                'investor:id,name,alias',
             ]);
 
         $query->when($request->client_id, fn($q, $id) => $q->clientId($id));
@@ -49,112 +51,68 @@ class CurrencyExchangeController extends Controller
         return $query->latest()->paginate(15)->withQueryString();
     }
 
-    public function store(Request $request)
+    /**
+     * Store utiliza ahora StoreCurrencyExchangeRequest para validación estricta.
+     * La lógica de cálculo de dinero se ha movido al TransactionService.
+     */
+    public function store(StoreCurrencyExchangeRequest $request)
     {
-        $rules = [
-            'operation_type'          => ['required', Rule::in(['purchase', 'exchange'])],
-            'client_id'               => 'required|exists:clients,id',
-            'broker_id'               => 'nullable|exists:brokers,id',
-            'provider_id'             => 'nullable|exists:providers,id',
-            'admin_user_id'           => 'required|exists:users,id',
-            'from_account_id'         => [
-                'nullable',
-                Rule::requiredIf($request->input('capital_type') !== 'investor'),
-                'integer',
-            ],
-            'to_account_id'           => 'required|exists:accounts,id',
-            'amount_sent'             => 'required|numeric|min:0.01',
-            'amount_received'         => 'required|numeric|min:0.01',
+        // 1. Obtener datos ya saneados y validados
+        $data = $request->validated();
 
-            // Porcentajes de comisiones
-            'commission_charged_pct'  => 'nullable|numeric|min:0',
-            'commission_provider_pct' => 'nullable|numeric|min:0',
-            'commission_broker_pct'   => 'nullable|numeric|min:0',
-
-            // Referencia y Entrega/Pago
-            'reference_id'            => 'nullable|string|max:255',
-            'delivered'               => 'sometimes|boolean',
-            'paid'                    => 'sometimes|boolean', // <--- NUEVO CAMPO AÑADIDO
-
-            // --- NUEVOS CAMPOS: CAPITAL DE TERCERO ---
-            'capital_type'            => 'required|in:own,investor',
-            // El inversionista es obligatorio solo si el tipo de capital es 'investor'
-            'investor_id'             => 'required_if:capital_type,investor|nullable|exists:investors,id',
-            'investor_profit_pct'     => 'nullable|numeric|min:0',
-            'investor_profit_amount'  => 'nullable|numeric|min:0',
-        ];
-
-        // Reglas condicionales según tipo de operación
-        if ($request->operation_type === 'exchange') {
-            $rules['exchange_rate']        = 'required|numeric|min:0.00000001';
-            $rules['platform_id']          = 'required|exists:platforms,id';
-            $rules['commission_admin_pct'] = 'nullable|numeric|min:0';
-        } else {
-            $rules['buy_rate']      = 'required|numeric|min:0.00000001';
-            $rules['received_rate'] = 'required|numeric|min:0.00000001';
-            $rules['platform_id']   = 'nullable|exists:platforms,id';
-        }
-
-        $validatedData = $request->validate($rules);
-
-        $dataToService = $validatedData;
-
-        $dataToService['type'] = $request->operation_type;
-        // Mapeo de datos opcionales
-        $dataToService['buy_rate']      = $request->get('buy_rate', null);
-        $dataToService['received_rate'] = $request->get('received_rate', null);
-        $dataToService['platform_id']   = $request->get('platform_id', null);
-
-        // Porcentajes
-        $dataToService['commission_admin_pct']  = $request->get('commission_admin_pct', 0);
-        $dataToService['commission_broker_pct'] = $request->get('commission_broker_pct', 0);
-
-        // Montos Monetarios (Calculados en Frontend)
-        $dataToService['commission_total_amount']    = $request->get('commission_charged_amount', 0);
-        $dataToService['commission_provider_amount'] = $request->get('commission_provider_amount', 0);
-        $dataToService['commission_admin_amount']    = $request->get('commission_admin_amount', 0);
-        $dataToService['commission_broker_amount']   = $request->get('commission_broker_amount', 0);
-
-        // --- MAPEO DE INVERSIONISTA ---
-        $dataToService['capital_type']           = $request->get('capital_type', 'own');
-        $dataToService['investor_id']            = $request->get('investor_id', null);
-        $dataToService['investor_profit_pct']    = $request->get('investor_profit_pct', 0);
-        $dataToService['investor_profit_amount'] = $request->get('investor_profit_amount', 0);
-
-        // --- ESTADOS DE PAGO Y ENTREGA ---
+        // 2. Normalización de Datos
+        // Determinamos el estado inicial basado en flags booleanos
         $isDelivered = $request->boolean('delivered', true);
-        $isPaid      = $request->boolean('paid', true); // <--- CAPTURAMOS EL CHECKBOX
+        $isPaid      = $request->boolean('paid', true);
 
-        $dataToService['delivered'] = $isDelivered;
-        $dataToService['paid']      = $isPaid;
-
-        // Estado según lógica combinada
-        if ($request->operation_type === 'purchase') {
+        $status = 'completed';
+        
+        // Lógica de estados para Compras (Purchase)
+        if ($data['operation_type'] === 'purchase') {
             if (!$isDelivered && !$isPaid) {
-                $dataToService['status'] = 'pending_both'; // Pendiente de todo
+                $status = 'pending_both';     // Ni entregado ni pagado
             } elseif (!$isDelivered) {
-                $dataToService['status'] = 'pending_delivery'; // Por Cobrar (Falta entregar/recibir USD)
+                $status = 'pending_delivery'; // Falta entregar divisa
             } elseif (!$isPaid) {
-                $dataToService['status'] = 'pending_payment'; // Por Pagar (Falta pagar VES)
-            } else {
-                $dataToService['status'] = 'completed';
+                $status = 'pending_payment';  // Falta pagar bolívares
             }
-            $dataToService['exchange_rate'] = $dataToService['received_rate'];
-        } else {
-            $dataToService['status'] = 'completed';
+            
+            // En compras, aseguramos que exchange_rate sea consistente
+            // (Si viene received_rate, lo usamos como la tasa oficial del registro)
+            $data['exchange_rate'] = $data['received_rate'] ?? $data['buy_rate'];
         }
+
+        // Agregamos datos de control al array que irá al servicio
+        $data['status']    = $status;
+        $data['delivered'] = $isDelivered;
+        $data['paid']      = $isPaid;
+        $data['type']      = $data['operation_type']; // Normalizar nombre para la BD
 
         try {
-            $transaction = $this->transactionService->createCurrencyExchange($dataToService);
+            // 3. Delegar al servicio (Backend Authority)
+            // El servicio ignorará cualquier monto calculado y usará los porcentajes
+            $transaction = $this->transactionService->createCurrencyExchange($data);
+            
             return response()->json($transaction, 201);
+
         } catch (\Exception $e) {
-            return response()->json(['message' => 'Error al procesar la transacción', 'error' => $e->getMessage()], 400);
+            // Loguear el error real internamente
+            Log::error("Error creando intercambio: " . $e->getMessage(), [
+                'user_id' => Auth::id(),
+                'trace' => $e->getTraceAsString()
+            ]);
+
+            // Responder al usuario
+            return response()->json([
+                'message' => 'Error al procesar la transacción', 
+                'error' => $e->getMessage() // En prod podrías ocultar esto
+            ], 400);
         }
     }
 
     public function markDelivered(CurrencyExchange $exchange)
     {
-        // 1. VALIDACIÓN ROBUSTA DE TIPO (Implementada en el paso anterior)
+        // 1. Validación de lógica de negocio
         if ($exchange->type !== 'purchase') {
             return response()->json(['message' => 'Solo aplicable a compras de divisa (cash)'], 400);
         }
@@ -163,34 +121,37 @@ class CurrencyExchangeController extends Controller
             return response()->json(['message' => 'Ya está marcada como entregada'], 400);
         }
 
-        // 2. SEGURIDAD: Usar Permisos en lugar de Roles fijos
-        // Usamos 'manage_exchanges' que ya tienes definido en tus rutas,
-        // o podrías crear uno específico como 'mark_exchange_delivered'.
+        // 2. Seguridad (Permissions)
         $user = Auth::user();
         if (! $user->can('manage_exchanges') && ! $user->hasRole('superadmin')) {
             return response()->json(['message' => 'No tienes permiso para confirmar entregas.'], 403);
         }
 
+        // 3. Actualización
         $exchange->status = 'completed';
         $exchange->save();
+
+        // Opcional: Aquí podrías disparar un evento si necesitas recalcular algo más en el futuro
 
         return response()->json(['message' => 'Transacción marcada como entregada']);
     }
 
     public function show($id)
     {
+        // Usamos withoutGlobalScopes para buscar, luego validamos el tenant manualmente 
+        // para evitar errores 404 confusos si el ID existe en otro tenant.
         $tx = CurrencyExchange::withoutGlobalScopes()->find($id);
 
         if (! $tx) {
             return response()->json(['message' => 'Transacción no encontrada'], 404);
         }
 
+        // Validación de seguridad Multi-Tenant
         $user = auth()->user();
         if ($tx->tenant_id != $user->tenant_id) {
             return response()->json(['message' => 'No autorizado'], 403);
         }
 
-        // Carga de relaciones
         $tx->load([
             'client',
             'broker.user',
@@ -198,7 +159,7 @@ class CurrencyExchangeController extends Controller
             'adminUser',
             'fromAccount',
             'toAccount',
-            'investor', // Cargar al inversionista si existe
+            'investor',
         ]);
 
         return response()->json($tx);

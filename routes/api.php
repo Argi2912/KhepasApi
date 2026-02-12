@@ -42,6 +42,7 @@ use App\Http\Controllers\Api\TransactionController;
 use App\Http\Controllers\Api\Superadmin\ActivityLogController;
 use App\Http\Controllers\Api\Superadmin\TenantController;
 use App\Http\Controllers\Api\TenantUserController;
+use App\Http\Controllers\Api\SupportController;
 
 /*
 |--------------------------------------------------------------------------
@@ -51,6 +52,7 @@ use App\Http\Controllers\Api\TenantUserController;
 
 Route::post('login', [AuthController::class, 'login']);
 Route::post('/register', [RegisterController::class, 'register']);
+Route::post('/support/contact', [SupportController::class, 'sendContact']); // 👈 Ponla aquí
 
 Route::get('tenants/check-status/{tenant}', function ($id) {
     $tenant = \App\Models\Tenant::find($id);
@@ -88,6 +90,7 @@ Route::group(['middleware' => ['auth:api']], function () {
     // --- RUTAS DE PAGO DE SUSCRIPCIÓN (NUEVO) ---
     Route::post('/subscription/paypal', [SubscriptionController::class, 'payWithPaypal']);
     Route::post('/subscription/capture-registration', [SubscriptionController::class, 'captureRegistrationPayment']);
+    Route::post('/support/contact', [App\Http\Controllers\Api\SupportController::class, 'sendContact']);
 });
 
 

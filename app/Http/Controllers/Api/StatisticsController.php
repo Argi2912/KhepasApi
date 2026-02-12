@@ -61,7 +61,22 @@ class StatisticsController extends Controller
             ->pluck('total', 'period')
             ->toArray();
 
-        $exchangeIncome = CurrencyExchange::selectRaw("DATE_FORMAT(created_at, ?) as period, SUM(commission_total_amount) as total", [$groupFormat])
+        // 💰 CAMBIO 1: Cálculo de Utilidad Neta para el Gráfico
+        // (Antes sumabas commission_total_amount bruto, ahora restamos costos)
+        $netProfitCalc = '
+            SUM(
+                COALESCE(commission_total_amount, 0) - 
+                (
+                    COALESCE(commission_provider_amount, 0) + 
+                    COALESCE(commission_broker_amount, 0) + 
+                    COALESCE(commission_admin_amount, 0) +
+                    COALESCE(investor_profit_amount, 0)
+                )
+            )
+        ';
+
+        // Inyectamos la fórmula en tu consulta original
+        $exchangeIncome = CurrencyExchange::selectRaw("DATE_FORMAT(created_at, ?) as period, $netProfitCalc as total", [$groupFormat])
             ->completed()
             ->whereBetween('created_at', [$startDate, $endDate])
             ->groupBy('period')
@@ -127,7 +142,7 @@ class StatisticsController extends Controller
                 'labels'   => $labels,
                 'datasets' => [
                     [
-                        'label'           => 'Ingresos',
+                        'label'           => 'Ingresos Netos', // Etiqueta actualizada
                         'data'            => $dataIncome,
                         'backgroundColor' => 'rgba(34, 197, 94, 0.6)',
                         'borderColor'     => '#22c55e',
@@ -192,17 +207,31 @@ class StatisticsController extends Controller
         $reports = [];
 
         foreach ($entities as $entity) {
-            // Consulta optimizada
-            // 'total_net_profit' ahora acumula 'amount_received' (Entrada Total de Dinero)
+            
+            // 💰 CAMBIO 2: Cálculo de Utilidad Neta para Reportes
+            // Antes usabas SUM(amount_received), que estaba mal (era volumen).
+            // Ahora calculamos: Comisión Total - Gastos de Terceros
+            $netProfitFormula = '
+                SUM(
+                    COALESCE(commission_total_amount, 0) - 
+                    (
+                        COALESCE(commission_provider_amount, 0) + 
+                        COALESCE(commission_broker_amount, 0) + 
+                        COALESCE(commission_admin_amount, 0) +
+                        COALESCE(investor_profit_amount, 0)
+                    )
+                ) as total_net_profit
+            ';
+
             $stats = CurrencyExchange::where($relationField, $entity->id)
                 ->completed() // Scope: status = 'completed'
                 ->whereBetween('created_at', [$startDate, $endDate])
-                ->selectRaw('
+                ->selectRaw("
                     COUNT(*) as total_transactions,
                     SUM(commission_total_amount) as total_gross_profit,
-                    SUM(amount_received) as total_net_profit,
+                    $netProfitFormula,
                     SUM(amount_sent + amount_received) as total_volume_moved
-                ')
+                ")
                 ->first();
 
             // Si no hay movimientos, saltamos
@@ -212,20 +241,19 @@ class StatisticsController extends Controller
 
             // Mapeo de datos para el reporte
             $reports[] = [
-                'entity_id'          => $entity->id,
-                'entity_name'        => $entity->name ?? $entity->alias ?? 'Sin Nombre',
+                'entity_id'           => $entity->id,
+                'entity_name'         => $entity->name ?? $entity->alias ?? 'Sin Nombre',
 
                 // Ganancia generada (Bruta de la operación)
-                'total_profit'       => round($stats->total_gross_profit ?? 0, 2),
+                'total_profit'        => round($stats->total_gross_profit ?? 0, 2),
 
-                // Ganancia Neta (Ahora mapeada a Entrada Total de Dinero)
-                // Usamos 'total_paid_to_admin' porque es la clave que el Frontend espera para la columna "Ganancia Neta"
+                // Ganancia Neta (Ahora tiene el valor real)
                 'total_paid_to_admin' => round($stats->total_net_profit ?? 0, 2),
 
                 // Volumen total (Suma de lo enviado + recibido)
-                'total_moved'        => round($stats->total_volume_moved ?? 0, 2),
+                'total_moved'         => round($stats->total_volume_moved ?? 0, 2),
 
-                'transaction_count'  => $stats->total_transactions,
+                'transaction_count'   => $stats->total_transactions,
             ];
         }
 
@@ -260,39 +288,32 @@ class StatisticsController extends Controller
         return response()->json($this->getEntityReport('broker', $request));
     }
 
-    public function getInvestorReport(\Illuminate\Http\Request $request)
+    public function getInvestorReport(Request $request)
     {
-        // 1. Cargamos el Inversionista con su Cuenta (Saldo actual) y sus Entradas (Historial)
         $investors = \App\Models\Investor::with(['account', 'ledgerEntries' => function ($q) {
             $q->where('type', 'payable');
         }])->get();
 
-        $now = \Carbon\Carbon::now();
+        $now = Carbon::now();
 
-        // 2. Preparamos los datos EXACTOS para EntityReport
         $data = $investors->map(function ($investor) use ($now) {
-
-            // --- LÓGICA DE RECUPERACIÓN DE DINERO ---
-            // Opción A: Saldo en la tabla 'accounts' (Lo más preciso)
             $capital = $investor->account ? $investor->account->balance : 0;
 
-            // Opción B: Si es 0, sumamos todo lo que ha entrado al Ledger (Respaldo)
             if ($capital == 0) {
                 $capital = $investor->ledgerEntries->sum('original_amount');
             }
 
-            // Cálculo de Interés
-            $start = \Carbon\Carbon::parse($investor->created_at);
+            $start = Carbon::parse($investor->created_at);
             $months = $start->diffInMonths($now);
             $rate = $investor->interest_rate / 100;
             $totalDebt = $capital * pow((1 + $rate), $months);
 
             return [
-                'entity_id'   => $investor->id,
-                'entity_name' => $investor->name,
-                'capital_invested' => round($capital, 2),
-                'monthly_rate'     => $investor->interest_rate . '%',
-                'payout_day'       => 'Día ' . $investor->payout_day,
+                'entity_id'         => $investor->id,
+                'entity_name'       => $investor->name,
+                'capital_invested'  => round($capital, 2),
+                'monthly_rate'      => $investor->interest_rate . '%',
+                'payout_day'        => 'Día ' . $investor->payout_day,
                 'total_accumulated' => round($totalDebt, 2),
             ];
         });

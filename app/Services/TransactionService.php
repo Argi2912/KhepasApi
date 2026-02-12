@@ -6,26 +6,29 @@ use App\Models\Account;
 use App\Models\Broker;
 use App\Models\Client;
 use App\Models\CurrencyExchange;
-use App\Models\ExchangeRate; 
+use App\Models\ExchangeRate;
 use App\Models\InternalTransaction;
 use App\Models\Investor;
 use App\Models\LedgerEntry;
 use App\Models\Platform;
 use App\Models\Provider;
-use App\Models\User; 
+use App\Models\User;
 use Exception;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class TransactionService
 {
     // =========================================================================
-    // 0. GENERADOR DE SECUENCIALES
+    // 0. GENERADOR DE SECUENCIALES (SECURE)
     // =========================================================================
     private function generateSequentialNumber(string $modelClass, string $prefix): string
     {
-        $latest = $modelClass::withoutGlobalScopes()
-            ->withTrashed()
+        // 🔒 LOCK: Bloqueamos la fila más reciente para evitar duplicados en concurrencia
+        $latest = $modelClass::lockForUpdate()
+            ->withoutGlobalScopes()
+            ->withTrashed() // Consideramos eliminados para no repetir histórico
             ->latest('id')
             ->first();
         
@@ -34,79 +37,119 @@ class TransactionService
     }
 
     // =========================================================================
-    // 1. GESTIÓN DE OPERACIONES DE CAMBIO
+    // 1. GESTIÓN DE OPERACIONES DE CAMBIO (CORE)
     // =========================================================================
     public function createCurrencyExchange(array $data)
     {
         return DB::transaction(function () use ($data) {
-            $exchangeNumber = $this->generateSequentialNumber(CurrencyExchange::class, 'CE-');
-            $tenantId       = Auth::user()->tenant_id ?? 1;
             
-            // ID del usuario responsable
-            $userId         = $data['admin_user_id'] ?? Auth::id();
-
-            // -------------------------------------------------------------
-            // 👤 BUSCAMOS EL NOMBRE DEL USUARIO (OPERADOR)
-            // -------------------------------------------------------------
-            $operatorName = 'Usuario Sistema';
-            if ($userId) {
-                $u = User::find($userId);
-                if ($u) $operatorName = $u->name;
+            // 1. SEGURIDAD INICIAL
+            $user = Auth::user();
+            $tenantId = $user->tenant_id;
+            
+            if (!$tenantId) {
+                // En producción esto debería ser un log crítico
+                throw new Exception("Error de Seguridad: Usuario sin organización (Tenant) asignada.");
             }
 
-            // 1. PREPARACIÓN Y VALIDACIÓN
+            // 2. CÁLCULO DE MONTOS (BACKEND AUTHORITY) 🛡️
+            // Ignoramos montos calculados por JS. La verdad está aquí.
+            $amountReceived = (float) $data['amount_received'];
+            $amountSent     = (float) $data['amount_sent'];
+
+            // Porcentajes (Default 0 si no vienen)
+            $pctCharged  = (float) ($data['commission_charged_pct'] ?? 0);
+            $pctProvider = (float) ($data['commission_provider_pct'] ?? 0);
+            $pctAdmin    = (float) ($data['commission_admin_pct'] ?? 0);
+            $pctBroker   = (float) ($data['commission_broker_pct'] ?? 0);
+
+            // Cálculo Matemático Seguro
+            $amtCharged  = ($amountReceived * $pctCharged) / 100;   // Ganancia Casa
+            $amtProvider = ($amountReceived * $pctProvider) / 100;  // Costo Proveedor
+            $amtAdmin    = ($amountReceived * $pctAdmin) / 100;     // Costo Plataforma
+            $amtBroker   = ($amountReceived * $pctBroker) / 100;    // Costo Broker
+
+            // Inversionista (si aplica)
+            $investorProfitAmount = 0;
+            if (($data['capital_type'] ?? 'own') === 'investor') {
+                $pctInvestor = (float) ($data['investor_profit_pct'] ?? 0);
+                $investorProfitAmount = ($amountReceived * $pctInvestor) / 100;
+            }
+
+            // 3. DATOS ADMINISTRATIVOS
+            $exchangeNumber = $this->generateSequentialNumber(CurrencyExchange::class, 'CE-');
+            $userId         = $data['admin_user_id'] ?? $user->id;
+            
+            // Obtener nombre operador
+            $operatorUser = User::find($userId);
+            $operatorName = $operatorUser ? $operatorUser->name : 'Usuario Sistema';
+
+            // 4. VALIDACIÓN DE CUENTAS
             $fromAccount    = null;
             $fromAccountId  = null;
             $capitalType    = $data['capital_type'] ?? 'own';
-            $amountSent     = (float) $data['amount_sent'];
-            $amountReceived = (float) $data['amount_received'];
-
+            
             $isDelivered = $data['delivered'] ?? true; 
             $isPaid      = $data['paid'] ?? true;       
 
             if ($capitalType === 'own') {
-                if (empty($data['from_account_id'])) throw new Exception("Se requiere cuenta origen.");
+                if (empty($data['from_account_id'])) throw new Exception("Se requiere cuenta origen para capital propio.");
+                
                 $fromAccount = Account::lockForUpdate()->findOrFail($data['from_account_id']);
                 $fromAccountId = $fromAccount->id;
 
                 if ($isPaid && $fromAccount->balance < $amountSent) {
-                    throw new Exception("Saldo insuficiente en {$fromAccount->name}.");
+                    throw new Exception("Saldo insuficiente en {$fromAccount->name}. (Req: $amountSent)");
                 }
             }
 
             $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
 
-            // 2. CREACIÓN DE LA OPERACIÓN
+            // 5. CREACIÓN DE LA OPERACIÓN (PERSISTENCIA)
             $exchange = CurrencyExchange::create([
-                'tenant_id' => $tenantId,
-                'number' => $exchangeNumber,
-                'type' => $data['type'] ?? 'exchange',
-                'client_id' => $data['client_id'] ?? null,
-                'broker_id' => $data['broker_id'] ?? null,
-                'provider_id' => $data['provider_id'] ?? null,
-                'platform_id' => $data['platform_id'] ?? null,
-                'admin_user_id' => $userId,
+                'tenant_id'       => $tenantId,
+                'number'          => $exchangeNumber,
+                'type'            => $data['type'] ?? 'exchange',
+                'client_id'       => $data['client_id'] ?? null,
+                'broker_id'       => $data['broker_id'] ?? null,
+                'provider_id'     => $data['provider_id'] ?? null,
+                'platform_id'     => $data['platform_id'] ?? null,
+                'admin_user_id'   => $userId,
                 'from_account_id' => $fromAccountId,
-                'to_account_id' => $toAccount->id,
-                'amount_sent' => $amountSent,
+                'to_account_id'   => $toAccount->id,
+                
+                'amount_sent'     => $amountSent,
                 'amount_received' => $amountReceived,
-                'exchange_rate' => $data['exchange_rate'],
-                'buy_rate' => $data['buy_rate'] ?? null,
-                'received_rate' => $data['received_rate'] ?? null,
-                'commission_total_amount' => $data['commission_total_amount'] ?? 0,
-                'commission_provider_amount' => $data['commission_provider_amount'] ?? 0,
-                'commission_admin_amount' => $data['commission_admin_amount'] ?? 0,
-                'capital_type' => $capitalType,
-                'investor_id' => $data['investor_id'] ?? null,
-                'investor_profit_pct' => $data['investor_profit_pct'] ?? 0,
-                'investor_profit_amount' => $data['investor_profit_amount'] ?? 0,
+                
+                'exchange_rate'   => $data['exchange_rate'],
+                'buy_rate'        => $data['buy_rate'] ?? null,
+                'received_rate'   => $data['received_rate'] ?? null,
+                
+                // 🛡️ GUARDAMOS LOS MONTOS CALCULADOS POR NOSOTROS
+                'commission_total_amount'    => $amtCharged, // Asumimos que "total" es la ganancia de la casa
+                'commission_charged_amount'  => $amtCharged, 
+                'commission_provider_amount' => $amtProvider,
+                'commission_admin_amount'    => $amtAdmin,
+                'commission_broker_amount'   => $amtBroker,
+                
+                // Guardamos porcentajes para auditoría futura
+                'commission_charged_pct'  => $pctCharged,
+                'commission_provider_pct' => $pctProvider,
+                'commission_admin_pct'    => $pctAdmin,
+                'commission_broker_pct'   => $pctBroker,
+
+                'capital_type'           => $capitalType,
+                'investor_id'            => $data['investor_id'] ?? null,
+                'investor_profit_pct'    => $data['investor_profit_pct'] ?? 0,
+                'investor_profit_amount' => $investorProfitAmount,
+                
                 'reference_id' => $data['reference_id'] ?? null,
-                'status' => $data['status'] ?? 'completed'
+                'status'       => $data['status'] ?? 'completed'
             ]);
 
-            // 3. REGISTRAR MOVIMIENTOS DE CAJA
+            // 6. REGISTRAR MOVIMIENTOS DE CAJA (Internal Transactions)
 
-            // --- A. MONEY OUT ---
+            // --- A. MONEY OUT (Salida de dinero) ---
             if ($capitalType === 'own' && $isPaid && $fromAccount) {
                 $fromAccount->decrement('balance', $amountSent);
 
@@ -127,7 +170,7 @@ class TransactionService
                 ]);
             }
 
-            // --- B. MONEY IN ---
+            // --- B. MONEY IN (Entrada de dinero) ---
             if ($isDelivered) {
                 $toAccount->increment('balance', $amountReceived);
                 
@@ -148,7 +191,7 @@ class TransactionService
                 ]);
             }
 
-            // 4. AUDITORÍA DE TASA
+            // 7. AUDITORÍA DE TASA (Anti-Fraude)
             try {
                 if ($fromAccount && $toAccount) {
                     $officialRate = ExchangeRate::where('from_currency', $fromAccount->currency_code)
@@ -158,34 +201,53 @@ class TransactionService
                     if ($officialRate) {
                         $manualRateUsed = (float) $data['exchange_rate'];
                         $officialRateFloat = (float) $officialRate;
+                        // Si la diferencia es mayor a 0.0001, registramos alerta
                         if (abs($manualRateUsed - $officialRateFloat) > 0.0001) {
-                            activity()->performedOn($exchange)->causedBy(Auth::user())
-                                ->withProperties(['alert_type' => 'manual_rate_override', 'official_rate' => $officialRateFloat, 'manual_rate' => $manualRateUsed, 'difference' => $manualRateUsed - $officialRateFloat, 'client_name' => $exchange->client->name ?? 'N/A'])
+                            activity()->performedOn($exchange)->causedBy($user)
+                                ->withProperties([
+                                    'alert_type' => 'manual_rate_override', 
+                                    'official_rate' => $officialRateFloat, 
+                                    'manual_rate' => $manualRateUsed, 
+                                    'difference' => $manualRateUsed - $officialRateFloat, 
+                                    'client_name' => $exchange->client->name ?? 'N/A'
+                                ])
                                 ->event('security_alert')->log('alerta_tasa_modificada');
                         }
                     }
                 }
-            } catch (Exception $e) {}
+            } catch (Exception $e) {
+                // Silenciamos error de auditoría para no bloquear la transacción financiera
+                Log::warning("Fallo al auditar tasa: " . $e->getMessage());
+            }
 
-            // 5. REGISTRO DE DEUDAS
+            // 8. REGISTRO DE DEUDAS (LEDGER) - Usando valores calculados
             $currencySent = $fromAccount ? $fromAccount->currency_code : '???';
             $currencyReceived = $toAccount->currency_code;
 
+            // Deuda Principal con Cliente
             if (!$isPaid && $capitalType === 'own' && !empty($exchange->client_id)) {
                 $this->createLedgerDebt($exchange, $amountSent, $currencySent, 'payable', $exchange->client_id, Client::class, "Por Pagar (Op. {$exchangeNumber})", 'pending');
             }
             if (!$isDelivered && !empty($exchange->client_id)) {
                 $this->createLedgerDebt($exchange, $amountReceived, $currencyReceived, 'receivable', $exchange->client_id, Client::class, "Por Cobrar (Op. {$exchangeNumber})", 'pending');
             }
-            if (($p = (float)($data['commission_provider_amount'] ?? 0)) > 0 && !empty($data['provider_id']))
-                $this->createLedgerDebt($exchange, $p, 'USD', 'payable', $data['provider_id'], Provider::class, "Comisión Proveedor");
-            if (($b = (float)($data['commission_broker_amount'] ?? 0)) > 0 && !empty($data['broker_id']))
-                $this->createLedgerDebt($exchange, $b, 'USD', 'payable', $data['broker_id'], Broker::class, "Comisión Corredor");
-            if (($pl = (float)($data['commission_admin_amount'] ?? 0)) > 0 && !empty($data['platform_id']))
-                $this->createLedgerDebt($exchange, $pl, 'USD', 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
-            if (($c = (float)($data['commission_charged_amount'] ?? 0)) > 0 && !empty($exchange->client_id)) {
+
+            // Deudas de Comisiones (Usamos variables calculadas $amt...)
+            if ($amtProvider > 0 && !empty($data['provider_id']))
+                $this->createLedgerDebt($exchange, $amtProvider, 'USD', 'payable', $data['provider_id'], Provider::class, "Comisión Proveedor");
+            
+            if ($amtBroker > 0 && !empty($data['broker_id']))
+                $this->createLedgerDebt($exchange, $amtBroker, 'USD', 'payable', $data['broker_id'], Broker::class, "Comisión Corredor");
+            
+            if ($amtAdmin > 0 && !empty($data['platform_id']))
+                $this->createLedgerDebt($exchange, $amtAdmin, 'USD', 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
+            
+            if ($amtCharged > 0 && !empty($exchange->client_id)) {
                 $commStatus = $isDelivered ? 'paid' : 'pending';
-                $this->createLedgerDebt($exchange, $c, 'USD', 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $commStatus);
+                // Asumimos que la comisión de casa se cobra en USD o en la moneda recibida
+                // Si la moneda recibida no es USD, ojo con esto. Por defecto dejo USD según tu código original.
+                $commCurrency = 'USD'; 
+                $this->createLedgerDebt($exchange, $amtCharged, $commCurrency, 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $commStatus);
             }
 
             return $exchange->load('client');
@@ -212,14 +274,14 @@ class TransactionService
     }
 
     // =========================================================================
-    // 2. GESTIÓN DE MOVIMIENTOS INTERNOS (MODIFICADA PARA SALDO Y POSITIVOS)
+    // 2. GESTIÓN DE MOVIMIENTOS INTERNOS
     // =========================================================================
     public function createInternalTransaction(array $data)
     {
         return DB::transaction(function () use ($data) {
             $sourceType = $data['source_type'] ?? 'account';
             
-            // 🔥 CORRECCIÓN 1: Aseguramos que el monto sea siempre positivo
+            // 🔥 CORRECCIÓN: Aseguramos que el monto sea siempre positivo
             $amount     = abs((float) $data['amount']); 
             
             $type       = $data['type']; 
@@ -266,6 +328,7 @@ class TransactionService
             if ($entity) {
                 $remainingAmount = $amount;
                 $desc = $data['description'] ?? 'Movimiento Interno';
+                $tenantId = Auth::user()->tenant_id ?? 1;
 
                 // --- INCOME (Entra dinero a tu caja) ---
                 if ($type === 'income') {
@@ -275,7 +338,7 @@ class TransactionService
                         
                         // Creamos deuda Payable (Capital)
                         LedgerEntry::create([
-                            'tenant_id' => Auth::user()->tenant_id ?? 1,
+                            'tenant_id' => $tenantId,
                             'entity_type' => get_class($entity), 'entity_id' => $entity->id,
                             'type' => 'payable', 'amount' => $amount, 'original_amount' => $amount, 'paid_amount' => 0,
                             'status' => 'pending', 'currency_code' => $transactionCurrency, 
@@ -283,17 +346,14 @@ class TransactionService
                         ]);
                     }
                     elseif ($entity instanceof Provider) {
-                        // Proveedor -> Caja. ESTO ES UN RETIRO DE SU BILLETERA.
-                        // 🔥 CORRECCIÓN 2: Validamos que no tenga saldo infinito
+                        // Proveedor -> Caja. RETIRO DE SU BILLETERA.
                         if ($entity->available_balance < $amount) {
                             throw new Exception("El proveedor no tiene saldo suficiente (Disponible: {$entity->available_balance}).");
                         }
-                        // Restamos de su disponible
                         $entity->decrement('available_balance', $amount);
 
-                        // Creamos deuda Payable (Porque le debes ese dinero que sacaste)
                         LedgerEntry::create([
-                            'tenant_id' => Auth::user()->tenant_id ?? 1,
+                            'tenant_id' => $tenantId,
                             'entity_type' => get_class($entity), 'entity_id' => $entity->id,
                             'type' => 'payable', 'amount' => $amount, 'original_amount' => $amount, 'paid_amount' => 0,
                             'status' => 'pending', 'currency_code' => $transactionCurrency, 
@@ -301,7 +361,7 @@ class TransactionService
                         ]);
                     }
                     else {
-                        // Clientes (Cobranzas) - Tu código original de cobros
+                        // Clientes (Cobranzas)
                         $ledgers = LedgerEntry::where('entity_type', get_class($entity))
                             ->where('entity_id', $entity->id)->where('type', 'receivable')
                             ->where('status', '!=', 'paid')->orderBy('created_at', 'asc')->lockForUpdate()->get();
@@ -316,7 +376,7 @@ class TransactionService
                         if ($remainingAmount > 0) {
                             $balanceType = ($entity instanceof Provider) ? 'payable' : 'receivable'; 
                             LedgerEntry::create([
-                                'tenant_id' => Auth::user()->tenant_id ?? 1,
+                                'tenant_id' => $tenantId,
                                 'entity_type' => get_class($entity), 'entity_id' => $entity->id,
                                 'type' => $balanceType, 'amount' => $remainingAmount, 'original_amount' => $remainingAmount,
                                 'paid_amount' => ($balanceType === 'receivable' ? $remainingAmount : 0), 
@@ -332,16 +392,6 @@ class TransactionService
                     if ($entity instanceof Provider) {
                         // De Caja -> Proveedor. Aumenta su disponible.
                         $entity->increment('available_balance', $amount);
-
-                        // Opcional: Si quieres registrar esto en Ledger como "histórico", usa InternalTransaction abajo.
-                        // Tu código original creaba un Ledger Payable pagado, lo dejo comentado por si lo quieres:
-                        /*
-                        LedgerEntry::create([
-                           'tenant_id' => Auth::user()->tenant_id ?? 1, 'entity_type' => get_class($entity), 'entity_id' => $entity->id,
-                           'type' => 'payable', 'amount' => $amount, 'original_amount' => $amount, 'paid_amount' => 0, 'status' => 'pending',
-                           'currency_code' => $transactionCurrency, 'description' => $desc, 'due_date' => now(), 'transaction_type' => InternalTransaction::class
-                        ]);
-                        */
                     }
                     elseif ($entity instanceof Investor) {
                         // De Caja -> Inversionista (Retiro de Capital). Baja su saldo.
@@ -351,7 +401,7 @@ class TransactionService
                         $entity->decrement('available_balance', $amount);
                     }
                     else {
-                        // Pagos a Terceros (Tu código original)
+                        // Pagos a Terceros
                         $ledgers = LedgerEntry::where('entity_type', get_class($entity))
                             ->where('entity_id', $entity->id)->where('type', 'payable')
                             ->where('status', '!=', 'paid')->orderBy('created_at', 'asc')->lockForUpdate()->get();
@@ -371,7 +421,7 @@ class TransactionService
 
                         if ($remainingAmount > 0 && !($entity instanceof Investor) && !($entity instanceof Provider)) {
                             LedgerEntry::create([
-                                'tenant_id' => Auth::user()->tenant_id ?? 1,
+                                'tenant_id' => $tenantId,
                                 'entity_type' => get_class($entity), 'entity_id' => $entity->id,
                                 'type' => 'payable', 'amount' => $remainingAmount, 'original_amount' => $remainingAmount,
                                 'paid_amount' => $remainingAmount, 'status' => 'paid',
@@ -534,13 +584,13 @@ class TransactionService
         });
     }
 
-    // ⬇️ RECARGA DE BILLETERA (Tu función correcta para Providers) ⬇️
+    // ⬇️ RECARGA DE BILLETERA (Logic Providers) ⬇️
     public function addBalanceToEntity($entity, float $amount, string $currencyCode, ?string $description = 'Recarga')
     {
         return DB::transaction(function () use ($entity, $amount, $currencyCode, $description) {
             
-            // Comprobamos la clase de forma segura
             $className = get_class($entity);
+            $tenantId = Auth::user()->tenant_id ?? 1;
 
             if ($entity instanceof \App\Models\Provider || $className === 'App\Models\Provider') {
                 // 1. Incrementar saldo del proveedor
@@ -548,7 +598,7 @@ class TransactionService
 
                 // 2. Crear entrada en Ledger como "Por Pagar" al proveedor
                 LedgerEntry::create([
-                    'tenant_id' => Auth::user()->tenant_id ?? 1,
+                    'tenant_id' => $tenantId,
                     'entity_type' => $className,
                     'entity_id' => $entity->id,
                     'type' => 'payable',
@@ -564,9 +614,9 @@ class TransactionService
                 return $entity;
             }
 
-            // Si no es proveedor, sigue con tu lógica de Ledger normal (Inversionistas, etc)
+            // Si no es proveedor, lógica de Ledger normal
             return $entity->ledgerEntries()->create([
-                'tenant_id' => Auth::user()->tenant_id ?? 1,
+                'tenant_id' => $tenantId,
                 'description' => $description,
                 'amount' => $amount,
                 'original_amount' => $amount,

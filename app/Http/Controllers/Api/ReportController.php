@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Log;
 class ReportController extends Controller
 {
     // =========================================================================
-    //  1. MATRIZ DE RENTABILIDAD (CORREGIDO: TOP 15 POR GANANCIA)
+    //  1. MATRIZ DE RENTABILIDAD (CORREGIDO)
     // =========================================================================
     public function profitMatrix(Request $request)
     {
@@ -28,31 +28,42 @@ class ReportController extends Controller
         $start = $request->start_date ? $request->start_date . ' 00:00:00' : null;
         $end   = $request->end_date   ? $request->end_date   . ' 23:59:59' : null;
 
+        // 💰 CORRECCIÓN DEFINITIVA: Usamos 'commission_total_amount'
+        $profitCalculation = '
+            SUM(
+                COALESCE(commission_total_amount, 0) - 
+                (
+                    COALESCE(commission_provider_amount, 0) + 
+                    COALESCE(commission_broker_amount, 0) + 
+                    COALESCE(commission_admin_amount, 0) +
+                    COALESCE(investor_profit_amount, 0)
+                )
+            ) as total_profit
+        ';
+
         $query = CurrencyExchange::query()
             ->where('status', 'completed')
             ->whereNotNull('from_account_id')
             ->whereNotNull('to_account_id')
-            ->selectRaw('
+            ->selectRaw("
                 from_account_id, to_account_id,
                 COUNT(*) as total_ops,
                 SUM(amount_sent) as total_sent,
                 SUM(amount_received) as total_received,
-                SUM(COALESCE(commission_admin_amount, 0)) as total_profit
-            ')
+                $profitCalculation
+            ")
             ->groupBy('from_account_id', 'to_account_id');
 
         if ($start && $end) {
             $query->whereBetween('created_at', [$start, $end]);
         }
 
-        // CAMBIO 1: Ordenar por 'total_profit' (Ganancia) para ver las más rentables
         $data = $query->with(['fromAccount', 'toAccount'])
             ->orderByDesc('total_profit')
             ->get();
 
         $routes = $data->filter(fn($r) => $r->total_received > 0);
 
-        // CAMBIO 2: Tomar 15 registros
         $top15 = $routes->take(15)->map(fn($item) => [
             'source'           => $item->fromAccount?->name ?? 'N/A',
             'source_currency'  => $item->fromAccount?->currency_code ?? '???',
@@ -75,7 +86,7 @@ class ReportController extends Controller
                 'total_profit'      => round((float) $item->total_profit, 2),
                 'total_ops'         => (int) $item->total_ops,
             ]),
-            'top_10' => $top15, // Enviamos las 15 rutas aquí
+            'top_10' => $top15,
             'summary' => [
                 'total_routes'       => $routes->count(),
                 'total_volume_sent'  => round($routes->sum('total_sent'), 2),
@@ -88,7 +99,7 @@ class ReportController extends Controller
     }
 
     // =========================================================================
-    //  2. DESCARGA DE REPORTES (Sincronizado con StatisticsController)
+    //  2. DESCARGA DE REPORTES
     // =========================================================================
 
     public function download(Request $request)
@@ -109,31 +120,36 @@ class ReportController extends Controller
             if ($request->end_date) $q->whereDate('created_at', '<=', $request->end_date);
         };
 
-        // LÓGICA DE CÁLCULO IDÉNTICA A STATISTICS CONTROLLER
+        // 💰 CORRECCIÓN DEFINITIVA: Usamos 'commission_total_amount'
         $selectRawLogic = '
             COUNT(*) as total_ops,
-            SUM(amount_sent + amount_received) as total_moved,  /* CAMBIO CLAVE: Suma de ambos montos */
-            SUM(COALESCE(commission_total_amount, 0)) as total_gross, /* Ganancia Bruta */
-            SUM(amount_received) as total_net                     /* Ganancia Neta */
+            SUM(amount_sent + amount_received) as total_moved,
+            SUM(COALESCE(commission_total_amount, 0)) as total_gross, 
+            SUM(
+                COALESCE(commission_total_amount, 0) - 
+                (
+                    COALESCE(commission_provider_amount, 0) + 
+                    COALESCE(commission_broker_amount, 0) + 
+                    COALESCE(commission_admin_amount, 0) +
+                    COALESCE(investor_profit_amount, 0)
+                )
+            ) as total_net
         ';
 
         switch ($type) {
-            // -----------------------------------------------------------------
-            // 1. RESUMEN DE CLIENTES
-            // -----------------------------------------------------------------
             case 'clients_summary':
                 $title = "Resumen por Cliente";
-                $headers = ['Cliente', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+                $headers = ['Cliente', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Utilidad Neta'];
 
                 $query = CurrencyExchange::query()
                     ->where('tenant_id', $user->tenant_id)
-                    ->where('status', 'completed') // ✅ Solo completadas
+                    ->where('status', 'completed')
                     ->whereNotNull('client_id')
                     ->with('client')
                     ->selectRaw('client_id, ' . $selectRawLogic)
                     ->groupBy('client_id')
                     ->orderByDesc('total_moved');
-
+                
                 if ($entityId) $query->where('client_id', $entityId);
                 $applyDateFilter($query);
 
@@ -146,12 +162,9 @@ class ReportController extends Controller
                 ]);
                 break;
 
-            // -----------------------------------------------------------------
-            // 2. RESUMEN DE CORREDORES
-            // -----------------------------------------------------------------
             case 'brokers_summary':
                 $title = "Resumen por Corredor";
-                $headers = ['Corredor', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+                $headers = ['Corredor', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Utilidad Neta'];
 
                 $query = CurrencyExchange::query()
                     ->where('tenant_id', $user->tenant_id)
@@ -174,12 +187,9 @@ class ReportController extends Controller
                 ]);
                 break;
 
-            // -----------------------------------------------------------------
-            // 3. RESUMEN DE PROVEEDORES
-            // -----------------------------------------------------------------
             case 'providers_summary':
                 $title = "Resumen por Proveedor";
-                $headers = ['Proveedor', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+                $headers = ['Proveedor', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Utilidad Neta'];
 
                 $query = CurrencyExchange::query()
                     ->where('tenant_id', $user->tenant_id)
@@ -202,12 +212,9 @@ class ReportController extends Controller
                 ]);
                 break;
 
-            // -----------------------------------------------------------------
-            // 4. RESUMEN DE PLATAFORMAS
-            // -----------------------------------------------------------------
             case 'platforms_summary':
                 $title = "Resumen por Plataforma";
-                $headers = ['Plataforma/Cuenta', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Ganancia Neta'];
+                $headers = ['Cuenta Destino', 'Transacciones', 'Volumen Total', 'Ganancia Bruta', 'Utilidad Neta'];
 
                 $query = CurrencyExchange::query()
                     ->where('tenant_id', $user->tenant_id)
@@ -230,13 +237,11 @@ class ReportController extends Controller
                 ]);
                 break;
 
-            // -----------------------------------------------------------------
-            // 5. MATRIZ DE RENTABILIDAD (DESCARGA)
-            // -----------------------------------------------------------------
             case 'profit_matrix':
                 $title = "Matriz de Rentabilidad";
                 $headers = ['Ruta (Origen -> Destino)', 'Operaciones', 'Volumen Recibido', 'Ganancia Generada'];
 
+                // 💰 CORRECCIÓN DEFINITIVA: Usamos 'commission_total_amount'
                 $query = CurrencyExchange::query()
                     ->where('tenant_id', $user->tenant_id)
                     ->where('status', 'completed')
@@ -246,11 +251,19 @@ class ReportController extends Controller
                         from_account_id, to_account_id,
                         COUNT(*) as total_ops,
                         SUM(amount_received) as total_received,
-                        SUM(COALESCE(commission_admin_amount, 0)) as total_profit
+                        SUM(
+                            COALESCE(commission_total_amount, 0) - 
+                            (
+                                COALESCE(commission_provider_amount, 0) + 
+                                COALESCE(commission_broker_amount, 0) + 
+                                COALESCE(commission_admin_amount, 0) +
+                                COALESCE(investor_profit_amount, 0)
+                            )
+                        ) as total_profit
                     ')
                     ->groupBy('from_account_id', 'to_account_id')
                     ->with(['fromAccount', 'toAccount'])
-                    ->orderByDesc('total_received');
+                    ->orderByDesc('total_profit');
 
                 $applyDateFilter($query);
 
@@ -264,21 +277,36 @@ class ReportController extends Controller
 
             case 'operations':
                 $title = "Historial de Operaciones";
-                $headers = ['Ref', 'Fecha', 'Cliente', 'Tipo', 'Envía', 'Recibe', 'Tasa', 'Estado'];
-                $query = CurrencyExchange::with(['client', 'adminUser'])->where('tenant_id', $user->tenant_id)->orderBy('created_at', 'desc');
+                $headers = ['Ref', 'Fecha', 'Cliente', 'Tipo', 'Envía', 'Recibe', 'Tasa', 'Estado', 'Utilidad'];
+                $query = CurrencyExchange::with(['client', 'fromAccount', 'toAccount'])
+                    ->where('tenant_id', $user->tenant_id)
+                    ->orderBy('created_at', 'desc');
+                
                 if ($request->client_id) $query->where('client_id', $request->client_id);
                 if ($request->broker_id) $query->where('broker_id', $request->broker_id);
                 $applyDateFilter($query);
-                $data = $query->get()->map(fn($item) => [
-                    'ref' => $item->number ?? $item->id,
-                    'date' => $item->created_at->format('Y-m-d H:i'),
-                    'client' => $item->client->name ?? 'N/A',
-                    'type' => ($item->buy_rate > 0) ? 'COMPRA' : 'INTERCAMBIO',
-                    'sent' => number_format($item->amount_sent, 2),
-                    'recv' => number_format($item->amount_received, 2),
-                    'rate' => $item->exchange_rate,
-                    'status' => strtoupper($item->status ?? 'pending')
-                ]);
+
+                $data = $query->get()->map(function($item) {
+                    // 💰 CORRECCIÓN DEFINITIVA: Usamos 'commission_total_amount'
+                    $profit = $item->commission_total_amount - (
+                        $item->commission_provider_amount + 
+                        $item->commission_broker_amount + 
+                        $item->commission_admin_amount +
+                        $item->investor_profit_amount
+                    );
+
+                    return [
+                        'ref'    => $item->number ?? $item->id,
+                        'date'   => $item->created_at->format('Y-m-d H:i'),
+                        'client' => $item->client->name ?? 'N/A',
+                        'type'   => strtoupper($item->type),
+                        'sent'   => number_format($item->amount_sent, 2) . ' ' . ($item->fromAccount->currency_code ?? ''),
+                        'recv'   => number_format($item->amount_received, 2) . ' ' . ($item->toAccount->currency_code ?? ''),
+                        'rate'   => $item->exchange_rate,
+                        'status' => strtoupper($item->status),
+                        'profit' => number_format($profit, 2)
+                    ];
+                });
                 break;
 
             case 'internal':
@@ -286,7 +314,6 @@ class ReportController extends Controller
                 $title = "Reporte de Caja y Gastos";
                 $headers = ['Fecha', 'Tipo', 'Categoría', 'Cuenta / Billetera', 'Monto', 'Descripción'];
 
-                // 🔥 AQUÍ AGREGAMOS 'entity' PARA PODER LEER PROVEEDORES/INVERSIONISTAS
                 $query = InternalTransaction::with(['account', 'entity'])
                     ->where('tenant_id', $user->tenant_id)
                     ->orderBy('transaction_date', 'desc');
@@ -295,26 +322,16 @@ class ReportController extends Controller
                 if ($request->end_date) $query->whereDate('transaction_date', '<=', $request->end_date);
 
                 $data = $query->get()->map(function ($item) {
-
-                    // LÓGICA PARA DETECTAR BILLETERAS VIRTUALES EN EL PDF/EXCEL
                     $accName = 'Cuenta Eliminada';
-
-                    // 1. Si es Banco Real
                     if ($item->account) {
-                        $accName = $item->account->name;
-                    }
-                    // 2. Si es Billetera de Proveedor
-                    elseif ($item->entity_type && str_contains($item->entity_type, 'Provider')) {
+                        $accName = $item->account->name . ' (' . $item->account->currency_code . ')';
+                    } elseif ($item->entity_type && str_contains($item->entity_type, 'Provider')) {
                         $realName = $item->entity ? $item->entity->name : ($item->person_name ?? 'Proveedor');
                         $accName = "Billetera: $realName";
-                    }
-                    // 3. Si es Capital de Inversionista
-                    elseif ($item->entity_type && str_contains($item->entity_type, 'Investor')) {
+                    } elseif ($item->entity_type && str_contains($item->entity_type, 'Investor')) {
                         $realName = $item->entity ? $item->entity->name : ($item->person_name ?? 'Inversionista');
                         $accName = "Capital: $realName";
-                    }
-                    // 4. Fallback manual
-                    elseif ($item->person_name) {
+                    } elseif ($item->person_name) {
                         $accName = "Virtual: " . $item->person_name;
                     }
 
@@ -322,7 +339,7 @@ class ReportController extends Controller
                         'date' => $item->transaction_date,
                         'type' => $item->type === 'income' ? 'INGRESO' : 'EGRESO',
                         'cat'  => $item->category,
-                        'acc'  => $accName, // <--- Nombre corregido
+                        'acc'  => $accName,
                         'amt'  => number_format($item->amount, 2),
                         'desc' => $item->description
                     ];
@@ -360,7 +377,6 @@ class ReportController extends Controller
                 'headers' => $headers,
                 'data' => $data,
                 'companyName' => $user->tenant->name ?? 'Khepas',
-                // Si estás generando un reporte filtrado por fecha, puedes pasar esto:
                 'dateRange' => ($request->start_date ? $request->start_date : 'Inicio') . ' al ' . ($request->end_date ? $request->end_date : 'Hoy')
             ]);
             return $pdf->setPaper('a4', 'landscape')->download("{$type}_" . date('Ymd') . ".pdf");
