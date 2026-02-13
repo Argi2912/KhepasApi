@@ -12,12 +12,14 @@ class Provider extends Model
 {
     use HasFactory, BelongsToTenant, Filterable;
 
-    protected $fillable = ['tenant_id', 'name', 'contact_person', 'email', 'phone', 'available_balance', 'is_active'];
+    // 🔥 MODIFICADO: Agregamos 'is_commission_informative'
+    protected $fillable = ['tenant_id', 'name', 'contact_person', 'email', 'phone', 'available_balance', 'is_active', 'is_commission_informative'];
     
     // Agregamos 'balances' para que el frontend lo reciba
     protected $appends = ['current_balance', 'balances'];
 
-    protected $casts = ['available_balance' => 'float', 'is_active' => 'boolean'];
+    // 🔥 MODIFICADO: Agregamos el cast a boolean
+    protected $casts = ['available_balance' => 'float', 'is_active' => 'boolean', 'is_commission_informative' => 'boolean'];
 
     public function internalTransactions(): MorphMany
     {
@@ -32,8 +34,6 @@ class Provider extends Model
     /**
      * ✅ ESTA ES LA CLAVE: Agrupa los saldos por moneda
      */
-    // En App\Models\Provider.php
-
     public function getBalancesAttribute()
     {
         return $this->ledgerEntries()

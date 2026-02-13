@@ -39,11 +39,13 @@ class ProviderController extends Controller
 
     public function store(Request $request)
     {
+        // 🔥 MODIFICADO: Agregamos la validación del boolean
         $data = $request->validate([
             'name' => 'required|string|max:255', 
             'contact_person' => 'nullable', 
             'email' => 'nullable', 
-            'phone' => 'nullable'
+            'phone' => 'nullable',
+            'is_commission_informative' => 'boolean'
         ]);
         
         $data['available_balance'] = 0;
@@ -128,7 +130,7 @@ class ProviderController extends Controller
                 'transaction_date' => $request->transaction_date,
             ]);
 
-            // B. LIBRO MAYOR (LedgerEntry) - ¡ESTO ACTUALIZA EL SALDO!
+            // B. LIBRO MAYOR (LedgerEntry) - ¡ESTO ACTUALIZA EL SALDO POR PAGAR!
             LedgerEntry::create([
                 'tenant_id'        => $tenantId,
                 'user_id'          => $user->id,
@@ -141,8 +143,11 @@ class ProviderController extends Controller
                 'paid_amount'      => 0,
                 'description'      => "Financiamiento: " . $request->description,
                 'transaction_date' => $request->transaction_date,
-                'due_date'         => null // Opcional: podrías pedir fecha de vencimiento
+                'due_date'         => null 
             ]);
+
+            // 🔥 MODIFICADO: Aumenta el saldo DISPONIBLE (Fondeo) del proveedor
+            $provider->increment('available_balance', $request->amount_received);
 
             DB::commit();
             
