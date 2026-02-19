@@ -132,13 +132,23 @@ class TenantController extends Controller
                 DB::table('ledger_entries')
                     ->where('tenant_id', $tenant->id)->delete();
 
-                // 4. Eliminar el tenant — las demás FK con cascade se encargan del resto
+                // 4. Desactivar FK checks para limpiar tablas con FKs cruzadas sin cascade
+                //    (currency_exchanges, dollar_purchases, transaction_requests, etc.)
+                DB::statement('SET FOREIGN_KEY_CHECKS=0');
+
+                // 5. Eliminar el tenant — cascade borra users, accounts, clients, etc.
                 $tenant->delete();
+
+                // 6. Reactivar FK checks
+                DB::statement('SET FOREIGN_KEY_CHECKS=1');
             });
 
             return response()->noContent();
 
         } catch (\Exception $e) {
+            // Asegurar que FK checks se reactiven si hay error
+            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+
             return response()->json([
                 'message' => 'Error al eliminar el tenant: ' . $e->getMessage()
             ], 500);
