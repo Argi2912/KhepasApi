@@ -11,162 +11,117 @@ class RegisterController extends Controller
 {
     // Definición de Planes
     private $plans = [
+        'free' => [
+            'name' => 'Plan Gratuito',
+            'price' => 0.00,
+            'description' => 'Prueba de 7 días',
+            'days' => 7
+        ],
         'basic' => [
             'name' => 'Plan Básico',
             'price' => 10.00,
-            'description' => 'Suscripción Mensual - Plan Básico'
+            'description' => 'Suscripción Mensual - Plan Básico',
+            'days' => 30
         ],
         'pro'   => [
             'name' => 'Plan Profesional',
             'price' => 29.99,
-            'description' => 'Suscripción Mensual - Plan Profesional'
+            'description' => 'Suscripción Mensual - Plan Profesional',
+            'days' => 30
         ]
     ];
 
     public function register(Request $request)
     {
-        // 1. Validación
         $request->validate([
             'company_name' => 'required|string|max:255|unique:tenants,name',
             'admin_name'   => 'required|string|max:255',
             'admin_email'  => 'required|email|unique:users,email',
             'password'     => 'required|min:8|confirmed',
-            'plan'         => 'required|in:basic,pro',
-            'method'       => 'required|in:stripe,paypal'
+            'plan'         => 'required|in:free,basic,pro',
         ]);
 
-        DB::beginTransaction();
-        try {
-            // 2. Obtener datos del plan seleccionado
-            $planData = $this->plans[$request->plan];
+        return DB::transaction(function () use ($request) {
+            try {
+                $planData = $this->plans[$request->plan];
+                $isFree = $request->plan === 'free';
 
-            // 3. Crear el Tenant (INACTIVO)
-            $tenant = Tenant::create([
-                'name' => $request->company_name,
-                'is_active' => false, // <--- Nace inactivo hasta que pague
-                'plan_name' => $planData['name'],
-                'plan_price' => $planData['price'],
-                'subscription_ends_at' => now()->addMonth(), // Fecha tentativa
-            ]);
+                // 1. Crear el Tenant
+                $tenant = Tenant::create([
+                    'name' => $request->company_name,
+                    'plan_name' => $planData['name'],
+                    'plan_price' => $planData['price'],
+                    'is_active' => $isFree, // Solo se activa si es gratis
+                    'subscription_ends_at' => now()->addDays($planData['days']),
+                ]);
 
-            // 4. Crear el Usuario Admin (ACTIVO)
-            // El usuario debe estar activo para poder hacer login, 
-            // pero el Middleware 'EnsureTenantIsActive' lo bloqueará después.
-            $user = User::create([
-                'name' => $request->admin_name,
-                'email' => $request->admin_email,
-                'password' => Hash::make($request->password),
-                'tenant_id' => $tenant->id,
-                'is_active' => true 
-            ]);
+                // 2. Crear el Usuario Admin (Usando la lógica de tus otros controladores)
+                $user = User::create([
+                    'tenant_id' => $tenant->id,
+                    'name' => $request->admin_name,
+                    'email' => $request->admin_email,
+                    'password' => Hash::make($request->password),
+                    'is_active' => true
+                ]);
 
-            // Asignar rol (si usas Spatie)
-            // $user->assignRole('admin');
+                // 3. Asignar Rol (admin_tenant es el que usas en TenantController)
+                $user->assignRole('admin_tenant');
 
-            DB::commit();
+                // 4. Lógica de salida: Gratis vs Pago
+                if ($isFree) {
+                    return response()->json([
+                        'message' => 'Cuenta gratuita creada por 7 días.',
+                        'redirect_to' => 'login'
+                    ], 201);
+                }
 
-            // 5. Generar enlace de pago según el método
-            if ($request->method === 'stripe') {
-                return $this->handleStripe($tenant, $planData);
-            } else {
+                // Si es de pago, generamos PayPal
                 return $this->handlePayPal($tenant, $planData);
+            } catch (\Exception $e) {
+                Log::error("Error en registro: " . $e->getMessage());
+                return response()->json(['error' => 'Error procesando el registro'], 500);
             }
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            Log::error("Error en registro: " . $e->getMessage());
-            return response()->json(['error' => 'No se pudo procesar el registro.'], 500);
-        }
+        });
     }
 
-    /**
-     * Manejo de PayPal usando la configuración de services.php
-     * (Igual que en SubscriptionController)
-     */
     private function handlePayPal($tenant, $planData)
     {
+        // NOTA: Asegúrate de tener tus credenciales en el .env
+        $clientId = config('services.paypal.client_id');
+        $secret = config('services.paypal.secret');
+        $baseUrl = config('services.paypal.base_url'); // https://api-m.sandbox.paypal.com
+
         try {
-            // Cargar configuración desde config/services.php
-            $config = config('services.paypal');
-            $clientId = $config['client_id'];
-            $secret = $config['secret'];
-            $mode = $config['mode'];
-            $currency = $config['currency'] ?? 'USD';
+            // Obtener Token
+            $auth = Http::withBasicAuth($clientId, $secret)
+                ->asForm()->post("$baseUrl/v1/oauth2/token", ['grant_type' => 'client_credentials']);
 
-            $baseUrl = ($mode === 'sandbox') 
-                ? 'https://api-m.sandbox.paypal.com' 
-                : 'https://api-m.paypal.com';
+            $token = $auth->json()['access_token'];
 
-            // 1. Obtener Token de Acceso
-            $authResponse = Http::withBasicAuth($clientId, $secret)
-                ->asForm()
-                ->post("$baseUrl/v1/oauth2/token", [
-                    'grant_type' => 'client_credentials',
-                ]);
+            // Crear Orden
+            $order = Http::withToken($token)->post("$baseUrl/v2/checkout/orders", [
+                'intent' => 'CAPTURE',
+                'purchase_units' => [[
+                    'amount' => [
+                        'currency_code' => 'USD',
+                        'value' => number_format($planData['price'], 2, '.', '')
+                    ],
+                    'description' => "Pago de {$planData['name']} - {$tenant->name}"
+                ]],
+                'application_context' => [
+                    'return_url' => route('paypal.success', ['tenant' => $tenant->id]),
+                    'cancel_url' => route('paypal.cancel'),
+                ]
+            ])->json();
 
-            if ($authResponse->failed()) {
-                Log::error('PayPal Auth Error', $authResponse->json());
-                throw new \Exception('Error de autenticación con PayPal');
-            }
-
-            $accessToken = $authResponse->json()['access_token'];
-
-            // 2. URLs de Retorno (Frontend)
-            // IMPORTANTE: Pasamos el tenant_id para saber a quién activar al volver
-            $frontendUrl = env('FRONTEND_URL', 'http://localhost:5173');
-            $returnUrl = "$frontendUrl/payment-success?tenant_id={$tenant->id}";
-            $cancelUrl = "$frontendUrl/login"; // Si cancela, lo mandamos al login (donde verá que está bloqueado)
-
-            // 3. Crear Orden
-            $orderResponse = Http::withToken($accessToken)
-                ->post("$baseUrl/v2/checkout/orders", [
-                    'intent' => 'CAPTURE',
-                    'purchase_units' => [[
-                        'reference_id' => "REG_{$tenant->id}",
-                        'description' => $planData['description'],
-                        'amount' => [
-                            'currency_code' => $currency,
-                            'value' => number_format($planData['price'], 2, '.', '')
-                        ]
-                    ]],
-                    'application_context' => [
-                        'brand_name' => 'TuConpay',
-                        'landing_page' => 'LOGIN',
-                        'user_action' => 'PAY_NOW',
-                        'return_url' => $returnUrl,
-                        'cancel_url' => $cancelUrl
-                    ]
-                ]);
-
-            if ($orderResponse->failed()) {
-                Log::error('PayPal Order Error', $orderResponse->json());
-                throw new \Exception('Error creando la orden de pago');
-            }
-
-            $order = $orderResponse->json();
-
-            // Guardamos el ID de orden temporalmente (opcional)
-            $tenant->update(['external_payment_id' => $order['id']]);
-
-            // 4. Extraer enlace de aprobación
-            $approveLink = null;
-            foreach ($order['links'] as $link) {
-                if ($link['rel'] === 'approve') {
-                    $approveLink = $link['href'];
-                    break;
-                }
-            }
+            $approveLink = collect($order['links'])->where('rel', 'approve')->first()['href'];
 
             return response()->json(['url' => $approveLink]);
-
         } catch (\Exception $e) {
-            Log::error('PayPal Exception: ' . $e->getMessage());
-            // Si falla PayPal, no borramos el usuario, pero queda inactivo.
-            // El usuario podrá intentar pagar después al hacer login.
-            return response()->json(['error' => 'Registro creado, pero falló la generación del pago. Intente iniciar sesión.'], 500);
+            Log::error('PayPal Error: ' . $e->getMessage());
+            return response()->json(['error' => 'Error al generar link de pago, pero tu usuario fue creado. Intenta pagar desde el login.'], 500);
         }
     }
-
     /**
      * Manejo de Stripe (Placeholder - Mantén tu lógica si la usas luego)
      */

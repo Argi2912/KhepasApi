@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command(CalculateInvestorInterests::class)->daily();
+Schedule::command('tenants:deactivate-expired')->daily();
