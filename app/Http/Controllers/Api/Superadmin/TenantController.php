@@ -96,11 +96,53 @@ class TenantController extends Controller
     public function destroy($id)
     {
         $tenant = Tenant::findOrFail($id);
+
         if ($tenant->id === 1) {
             return response()->json(['message' => 'No puedes eliminar el tenant principal.'], 403);
         }
-        $tenant->delete();
-        return response()->noContent();
+
+        try {
+            DB::transaction(function () use ($tenant) {
+                $userIds = $tenant->users()->pluck('id')->toArray();
+
+                if (!empty($userIds)) {
+                    // 1. Limpiar tablas morph (Spatie permisos, tokens, activity log)
+                    DB::table('model_has_roles')
+                        ->where('model_type', User::class)
+                        ->whereIn('model_id', $userIds)->delete();
+
+                    DB::table('model_has_permissions')
+                        ->where('model_type', User::class)
+                        ->whereIn('model_id', $userIds)->delete();
+
+                    DB::table('personal_access_tokens')
+                        ->where('tokenable_type', User::class)
+                        ->whereIn('tokenable_id', $userIds)->delete();
+
+                    DB::table('activity_log')
+                        ->where('causer_type', User::class)
+                        ->whereIn('causer_id', $userIds)->delete();
+
+                    // 2. Limpiar ledger_payments (FK a users y accounts sin cascade)
+                    DB::table('ledger_payments')
+                        ->whereIn('user_id', $userIds)->delete();
+                }
+
+                // 3. Limpiar ledger_entries (tenant_id sin FK formal)
+                DB::table('ledger_entries')
+                    ->where('tenant_id', $tenant->id)->delete();
+
+                // 4. Eliminar el tenant — las demás FK con cascade se encargan del resto
+                $tenant->delete();
+            });
+
+            return response()->noContent();
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'Error al eliminar el tenant: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     public function toggleStatus(Tenant $tenant)
