@@ -136,10 +136,25 @@ class TenantController extends Controller
                 //    (currency_exchanges, dollar_purchases, transaction_requests, etc.)
                 DB::statement('SET FOREIGN_KEY_CHECKS=0');
 
-                // 5. Eliminar el tenant — cascade borra users, accounts, clients, etc.
+                // 5. Eliminar TODOS los datos del tenant explícitamente
+                DB::table('currency_exchanges')->where('tenant_id', $tenant->id)->delete();
+                DB::table('dollar_purchases')->where('tenant_id', $tenant->id)->delete();
+                DB::table('transaction_requests')->where('tenant_id', $tenant->id)->delete();
+                DB::table('internal_transactions')->where('tenant_id', $tenant->id)->delete();
+                DB::table('employees')->where('tenant_id', $tenant->id)->delete();
+                DB::table('platforms')->where('tenant_id', $tenant->id)->delete();
+                DB::table('exchange_rates')->where('tenant_id', $tenant->id)->delete();
+                DB::table('currencies')->where('tenant_id', $tenant->id)->delete();
+                DB::table('accounts')->where('tenant_id', $tenant->id)->delete();
+                DB::table('clients')->where('tenant_id', $tenant->id)->delete();
+                DB::table('brokers')->where('tenant_id', $tenant->id)->delete();
+                DB::table('providers')->where('tenant_id', $tenant->id)->delete();
+                DB::table('users')->where('tenant_id', $tenant->id)->delete();
+
+                // 6. Eliminar el tenant
                 $tenant->delete();
 
-                // 6. Reactivar FK checks
+                // 7. Reactivar FK checks
                 DB::statement('SET FOREIGN_KEY_CHECKS=1');
             });
 
