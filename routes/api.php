@@ -40,6 +40,7 @@ use App\Http\Controllers\Api\TransactionController;
 
 // Superadmin
 use App\Http\Controllers\Api\Superadmin\ActivityLogController;
+use App\Http\Controllers\Api\Superadmin\SuperadminUserController;
 use App\Http\Controllers\Api\Superadmin\TenantController;
 use App\Http\Controllers\Api\TenantUserController;
 use App\Http\Controllers\Api\SupportController;
@@ -69,6 +70,16 @@ Route::post('/webhooks/paypal', [WebhookController::class, 'handlePayPal']);
 |--------------------------------------------------------------------------
 */
 Route::group(['middleware' => ['auth:api', 'role:superadmin'], 'prefix' => 'superadmin'], function () {
+    // Perfil del Super Admin
+    Route::get('/profile', [SuperadminUserController::class, 'profile']);
+    Route::put('/profile', [SuperadminUserController::class, 'updateProfile']);
+
+    // Gestión global de usuarios
+    Route::get('/users', [SuperadminUserController::class, 'index']);
+    Route::put('/users/{user}', [SuperadminUserController::class, 'update']);
+    Route::post('/users/{user}/reset-password', [SuperadminUserController::class, 'resetPassword']);
+
+    // Tenants
     Route::get('/stats', [TenantController::class, 'dashboardStats']);
     Route::apiResource('tenants', TenantController::class);
     Route::patch('/tenants/{tenant}/toggle', [TenantController::class, 'toggleStatus']);
