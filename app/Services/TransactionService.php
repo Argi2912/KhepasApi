@@ -113,17 +113,6 @@ class TransactionService
                 if ($providerModel) {
                     $providerModel->decrement('available_balance', $amountSent);
                 }
-            } elseif ($capitalType === 'own' && $fromAccount) {
-                // CASO B: No se seleccionó proveedor (Capital Propio).
-                // Protegemos el dinero de TODOS los proveedores que esté mezclado en la cuenta.
-                $totalReservedForProviders = Provider::where('tenant_id', $tenantId)->sum('available_balance');
-                
-                // Calculamos cuánto dinero es realmente tuyo en esa cuenta
-                $ownCapitalAvailable = $fromAccount->balance - $totalReservedForProviders;
-
-                if ($ownCapitalAvailable < $amountSent) {
-                    throw new Exception("Operación Denegada: El saldo restante en esta cuenta está reservado para fondos de proveedores. Tu capital propio real disponible es: " . number_format($ownCapitalAvailable, 2));
-                }
             }
             // =========================================================
 
@@ -252,7 +241,9 @@ class TransactionService
             if ($amtAdmin > 0 && !empty($data['platform_id']))
                 $this->createLedgerDebt($exchange, $amtAdmin, 'USD', 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
             
-            if ($amtCharged > 0 && !empty($exchange->client_id)) {
+            if ($amtCharged > 0 && !empty($exchange->client_id) && ($data['type'] ?? 'exchange') === 'purchase') {
+                // Solo crear ledger de comisión para COMPRAS.
+                // En intercambios/divisa, la comisión ya está implícita en el spread de montos.
                 $commStatus = $isDelivered ? 'paid' : 'pending';
                 $commCurrency = 'USD'; 
                 $this->createLedgerDebt($exchange, $amtCharged, $commCurrency, 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $commStatus);
