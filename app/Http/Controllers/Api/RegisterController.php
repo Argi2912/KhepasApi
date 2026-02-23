@@ -70,7 +70,7 @@ class RegisterController extends Controller
             // Si el plan es gratuito, no llamamos a la pasarela, lo mandamos al login directo
             if ($request->plan === 'free') {
                 return response()->json([
-                    'message' => 'Registro exitoso. Disfruta tu prueba de 30 días .',
+                    'message' => 'Registro exitoso. Disfruta tu prueba de 30 días.',
                     'url'     => 'https://www.tuconpay.com/login' // URL para que inicie sesión
                 ]);
             }

@@ -241,13 +241,10 @@ class TransactionService
             if ($amtAdmin > 0 && !empty($data['platform_id']))
                 $this->createLedgerDebt($exchange, $amtAdmin, 'USD', 'payable', $data['platform_id'], Platform::class, "Costo Plataforma");
             
-            if ($amtCharged > 0 && !empty($exchange->client_id) && ($data['type'] ?? 'exchange') === 'purchase') {
-                // Solo crear ledger de comisión para COMPRAS.
-                // En intercambios/divisa, la comisión ya está implícita en el spread de montos.
-                $commStatus = $isDelivered ? 'paid' : 'pending';
-                $commCurrency = 'USD'; 
-                $this->createLedgerDebt($exchange, $amtCharged, $commCurrency, 'receivable', $exchange->client_id, Client::class, "Comisión de Casa", $commStatus);
-            }
+            // NOTA: La comisión de casa (commission_charged_amount) ya está reflejada
+            // en el spread de los montos (amount_received vs amount_sent) para TODOS
+            // los tipos de operación. NO se crea un ledger receivable separado porque
+            // duplicaría el cobro. La comisión queda registrada en el CurrencyExchange.
 
             return $exchange->load('client');
         });
