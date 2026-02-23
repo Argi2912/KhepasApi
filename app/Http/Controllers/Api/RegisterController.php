@@ -13,7 +13,7 @@ class RegisterController extends Controller
     // Agregamos el plan 'free'
     private $plans = [
         'free'  => [
-            'name'  => 'Plan Gratuito - Prueba de 7 días',
+            'name'  => 'Plan Gratuito - Prueba de 30 días',
             'price' => 0.00,
         ],
         'basic' => [
@@ -52,7 +52,7 @@ class RegisterController extends Controller
                 'plan'   => $request->plan,
                 'is_active' => $tenantStatus,
                 // Si en tu BD tienes una columna para el periodo de prueba, puedes agregarla así:
-                'subscription_ends_at' => $request->plan === 'free' ? now()->addDays(7) : null,
+                'subscription_ends_at' => $request->plan === 'free' ? now()->addDays(30) : null,
             ]);
 
             $user = User::create([
@@ -70,8 +70,8 @@ class RegisterController extends Controller
             // Si el plan es gratuito, no llamamos a la pasarela, lo mandamos al login directo
             if ($request->plan === 'free') {
                 return response()->json([
-                    'message' => 'Registro exitoso. Disfruta tu prueba de 7 días.',
-                    'url'     => 'http://localhost:5173/login' // URL para que inicie sesión
+                    'message' => 'Registro exitoso. Disfruta tu prueba de 30 días.',
+                    'url'     => 'https://www.tuconpay.com/login' // URL para que inicie sesión
                 ]);
             }
 
@@ -91,8 +91,8 @@ class RegisterController extends Controller
             $provider->setApiCredentials(config('paypal'));
             $provider->getAccessToken();
 
-            $returnUrl = "http://localhost:5173/payment-success?tenant_id={$tenant->id}";
-            $cancelUrl = "http://localhost:5173/register";
+            $returnUrl = "https://www.tuconpay.com/payment-success?tenant_id={$tenant->id}";
+            $cancelUrl = "https://www.tuconpay.com/register";
 
             $order = $provider->createOrder([
                 "intent" => "CAPTURE",
