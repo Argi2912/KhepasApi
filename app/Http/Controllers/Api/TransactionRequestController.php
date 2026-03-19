@@ -13,18 +13,14 @@ use Illuminate\Support\Facades\DB;
 
 class TransactionRequestController extends Controller
 {
-    public function __construct()
-    {
-        $this->middleware('permission:manage_transaction_requests');
-    }
 
     public function index(Request $request)
     {
         $query = TransactionRequest::query()->with('client:id,name');
 
         // Filtro por estado (Pending por defecto es útil para el dashboard)
-        $query->when($request->status, fn($q, $s) => $q->where('status', $s));
-        $query->when($request->client_id, fn($q, $id) => $q->where('client_id', $id));
+        $query->when($request->filled('status'), fn($q) => $q->where('status', $request->status));
+        $query->when($request->filled('client_id'), fn($q) => $q->where('client_id', $request->client_id));
 
         return $query->latest()->paginate(15);
     }
@@ -108,45 +104,6 @@ class TransactionRequestController extends Controller
             ]);
 
             return $internalTx;
-        });
-    }
-
-    public function approve(Request $request, TransactionRequest $transactionRequest, TransactionService $txService)
-    {
-        if ($transactionRequest->status !== 'pending') {
-            return response()->json(['message' => 'La solicitud no está pendiente'], 400);
-        }
-
-        $request->validate([
-            'account_id' => 'required|exists:accounts,id' // Desde donde le pagamos al cliente
-        ]);
-
-        // Iniciamos transacción DB
-        return \Illuminate\Support\Facades\DB::transaction(function () use ($request, $transactionRequest, $txService) {
-            
-            // 1. Si es RETIRO, creamos el egreso de caja
-            if ($transactionRequest->type === 'withdrawal') {
-                $txService->createInternalTransaction([
-                    'tenant_id' => $transactionRequest->tenant_id,
-                    'account_id' => $request->account_id,
-                    'user_id' => auth()->id(),
-                    'type' => 'expense',
-                    'category' => 'Retiro de Cliente',
-                    'amount' => $transactionRequest->amount,
-                    'description' => "Aprobación de solicitud #{$transactionRequest->id} - {$transactionRequest->notes}",
-                    'transaction_date' => now(),
-                ]);
-            }
-
-            // 2. Si es EXCHANGE, aquí deberías llamar a createCurrencyExchange
-            // (Esto es más complejo porque requiere tasas, etc., quizás solo lo marcas y rediriges).
-
-            // 3. Actualizamos la solicitud a procesada
-            $transactionRequest->update([
-                'status' => TransactionRequest::STATUS_PROCESSED
-            ]);
-
-            return response()->json(['message' => 'Solicitud aprobada y procesada']);
         });
     }
 }

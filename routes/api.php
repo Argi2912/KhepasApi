@@ -153,6 +153,7 @@ Route::group(['middleware' => ['auth:api', 'tenant.active']], function () {
     // --- D. MÓDULOS FINANCIEROS ---
     Route::apiResource('transactions/requests', TransactionRequestController::class)
         ->only(['index', 'store', 'update'])
+        ->parameters(['requests' => 'transaction_request'])
         ->middleware('permission:manage_transaction_requests');
     Route::patch('/transactions/exchanges/{exchange}/deliver', [CurrencyExchangeController::class, 'markDelivered']);
 

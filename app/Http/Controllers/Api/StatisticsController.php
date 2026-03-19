@@ -204,35 +204,39 @@ class StatisticsController extends Controller
         }
         $entities = $query->get();
 
+        // 💰 CAMBIO 2: Cálculo de Utilidad Neta para Reportes
+        $netProfitFormula = '
+            SUM(
+                COALESCE(commission_total_amount, 0) - 
+                (
+                    COALESCE(commission_provider_amount, 0) + 
+                    COALESCE(commission_broker_amount, 0) + 
+                    COALESCE(commission_admin_amount, 0) +
+                    COALESCE(investor_profit_amount, 0)
+                )
+            ) as total_net_profit
+        ';
+
+        // 🔥 FIX N+1: Obtenemos todas las estadísticas agrupadas en una sola consulta
+        $statsGrouped = CurrencyExchange::whereIn($relationField, $entities->pluck('id'))
+            ->completed() // Scope: status = 'completed'
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->selectRaw("
+                $relationField as entity_id,
+                COUNT(*) as total_transactions,
+                SUM(commission_total_amount) as total_gross_profit,
+                $netProfitFormula,
+                SUM(amount_sent + amount_received) as total_volume_moved
+            ")
+            ->groupBy($relationField)
+            ->get()
+            ->keyBy('entity_id');
+
         $reports = [];
 
         foreach ($entities as $entity) {
             
-            // 💰 CAMBIO 2: Cálculo de Utilidad Neta para Reportes
-            // Antes usabas SUM(amount_received), que estaba mal (era volumen).
-            // Ahora calculamos: Comisión Total - Gastos de Terceros
-            $netProfitFormula = '
-                SUM(
-                    COALESCE(commission_total_amount, 0) - 
-                    (
-                        COALESCE(commission_provider_amount, 0) + 
-                        COALESCE(commission_broker_amount, 0) + 
-                        COALESCE(commission_admin_amount, 0) +
-                        COALESCE(investor_profit_amount, 0)
-                    )
-                ) as total_net_profit
-            ';
-
-            $stats = CurrencyExchange::where($relationField, $entity->id)
-                ->completed() // Scope: status = 'completed'
-                ->whereBetween('created_at', [$startDate, $endDate])
-                ->selectRaw("
-                    COUNT(*) as total_transactions,
-                    SUM(commission_total_amount) as total_gross_profit,
-                    $netProfitFormula,
-                    SUM(amount_sent + amount_received) as total_volume_moved
-                ")
-                ->first();
+            $stats = $statsGrouped->get($entity->id);
 
             // Si no hay movimientos, saltamos
             if (! $stats || $stats->total_transactions == 0) {

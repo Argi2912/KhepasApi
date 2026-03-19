@@ -12,8 +12,8 @@ class Provider extends Model
 {
     use HasFactory, BelongsToTenant, Filterable;
 
-    // 🔥 MODIFICADO: Agregamos 'is_commission_informative'
-    protected $fillable = ['tenant_id', 'name', 'contact_person', 'email', 'phone', 'available_balance', 'is_active', 'is_commission_informative'];
+    // 🔥 MODIFICADO: Agregamos 'is_commission_informative' y 'details'
+    protected $fillable = ['tenant_id', 'name', 'contact_person', 'email', 'phone', 'details', 'available_balance', 'is_active', 'is_commission_informative'];
     
     // Agregamos 'balances' para que el frontend lo reciba
     protected $appends = ['current_balance', 'balances'];

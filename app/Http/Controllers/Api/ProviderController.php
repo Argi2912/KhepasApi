@@ -45,6 +45,7 @@ class ProviderController extends Controller
             'contact_person' => 'nullable', 
             'email' => 'nullable', 
             'phone' => 'nullable',
+            'details' => 'nullable',
             'is_commission_informative' => 'boolean'
         ]);
         
