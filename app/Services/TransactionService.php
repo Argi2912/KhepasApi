@@ -95,7 +95,10 @@ class TransactionService
                 }
             }
 
-            $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
+            $toAccount = null;
+            if (!empty($data['to_account_id'])) {
+                $toAccount = Account::lockForUpdate()->findOrFail($data['to_account_id']);
+            }
 
             // =========================================================
             // 🔥 MODIFICADO: GESTIÓN DE FONDOS (PROTECCIÓN DE CAPITAL)
@@ -127,7 +130,7 @@ class TransactionService
                 'platform_id'     => $data['platform_id'] ?? null,
                 'admin_user_id'   => $userId,
                 'from_account_id' => $fromAccountId,
-                'to_account_id'   => $toAccount->id,
+                'to_account_id'   => $toAccount ? $toAccount->id : null,
                 'amount_sent'     => $amountSent,
                 'amount_received' => $amountReceived,
                 'exchange_rate'   => $data['exchange_rate'],
@@ -170,7 +173,7 @@ class TransactionService
                 ]);
             }
 
-            if ($isDelivered) {
+            if ($isDelivered && $toAccount) {
                 $toAccount->increment('balance', $amountReceived);
                 InternalTransaction::create([
                     'tenant_id' => $tenantId,
@@ -218,7 +221,7 @@ class TransactionService
 
             // 8. REGISTRO DE DEUDAS (LEDGER)
             $currencySent = $fromAccount ? $fromAccount->currency_code : '???';
-            $currencyReceived = $toAccount->currency_code;
+            $currencyReceived = $toAccount ? $toAccount->currency_code : 'USD';
 
             if (!$isPaid && $capitalType === 'own' && !empty($exchange->client_id)) {
                 $this->createLedgerDebt($exchange, $amountSent, $currencySent, 'payable', $exchange->client_id, Client::class, "Por Pagar (Op. {$exchangeNumber})", 'pending');
