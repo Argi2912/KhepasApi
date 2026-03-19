@@ -286,14 +286,20 @@ class TransactionService
                 if($u) $personName = $u->name;
             }
 
+            $paymentStatus = $data['payment_status'] ?? 'paid';
+
             if ($sourceType === 'account') {
                 $account = Account::lockForUpdate()->find($data['account_id']);
                 if (!$account) throw new Exception("Cuenta no encontrada.");
                 $transactionCurrency = $account->currency_code;
 
                 if ($type === 'expense') {
-                    if ($account->balance < $amount) throw new Exception("Saldo insuficiente en Banco.");
-                    $account->decrement('balance', $amount);
+                    // Si el pago es pendiente, NO descontamos de la caja ahora.
+                    // Generamos un Ledger de tipo 'payable' más abajo.
+                    if ($paymentStatus === 'paid') {
+                        if ($account->balance < $amount) throw new Exception("Saldo insuficiente en Banco.");
+                        $account->decrement('balance', $amount);
+                    }
                 } else {
                     $account->increment('balance', $amount);
                 }
@@ -302,6 +308,26 @@ class TransactionService
             $entity = null;
             $entityType = $data['entity_type'] ?? null;
             $entityId   = $data['entity_id'] ?? null;
+
+            // Lógica para Generar Pasivo (Cuentas por Pagar) si el estatus es 'pending'
+            if ($paymentStatus === 'pending' && $type === 'expense') {
+                $tenantId = Auth::user()->tenant_id ?? 1;
+                $desc = $data['description'] ?? 'Gasto Pendiente';
+                
+                LedgerEntry::create([
+                    'tenant_id' => $tenantId,
+                    'entity_type' => $entityType ?? \App\Models\User::class, // Fallback a usuario si es manual
+                    'entity_id' => $entityId ?? Auth::id(),
+                    'type' => 'payable',
+                    'amount' => $amount,
+                    'original_amount' => $amount,
+                    'paid_amount' => 0,
+                    'status' => 'pending',
+                    'currency_code' => $transactionCurrency,
+                    'description' => "$desc (Pasivo por Pagar)",
+                    'due_date' => now(),
+                ]);
+            }
 
             if ($sourceType === 'investor') {
                 $entityType = Investor::class;

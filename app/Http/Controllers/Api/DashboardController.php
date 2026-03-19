@@ -62,8 +62,13 @@ class DashboardController extends Controller
             }
         }
 
+        $accounts_breakdown = Account::select('name as bank_name', 'currency_code', 'balance')
+            ->orderBy('currency_code')
+            ->get();
+
         return response()->json([
-            'breakdown' => $balance_desglosado
+            'breakdown' => $balance_desglosado,
+            'accounts_breakdown' => $accounts_breakdown
         ]);
     }
 }

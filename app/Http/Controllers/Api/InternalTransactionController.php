@@ -51,6 +51,7 @@ class InternalTransactionController extends Controller
             'description'      => 'nullable',
             'dueño'            => 'nullable',     // Texto de respaldo
             'person_name'      => 'nullable',     // Texto de respaldo
+            'payment_status'   => 'nullable|in:paid,pending',
         ]);
 
         $validated['user_id'] = Auth::id(); 
