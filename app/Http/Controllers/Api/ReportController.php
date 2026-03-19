@@ -382,4 +382,37 @@ class ReportController extends Controller
             return $pdf->setPaper('a4', 'landscape')->download("{$type}_" . date('Ymd') . ".pdf");
         }
     }
+
+    public function downloadTransactionReceipt($id)
+    {
+        $user = auth()->user();
+        if (!$user) abort(401);
+
+        // 1. Intentar buscar en Intercambios
+        $transaction = \App\Models\CurrencyExchange::where('tenant_id', $user->tenant_id)
+            ->with(['client', 'fromAccount', 'toAccount', 'adminUser'])
+            ->find($id);
+
+        $type = 'exchange';
+
+        if (!$transaction) {
+            // 2. Intentar buscar en Movimientos Internos
+            $transaction = \App\Models\InternalTransaction::where('tenant_id', $user->tenant_id)
+                ->with(['account', 'user', 'entity'])
+                ->find($id);
+            $type = 'internal';
+        }
+
+        if (!$transaction) {
+            abort(404, "Transacción no encontrada.");
+        }
+
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('reports.transaction_receipt', [
+            'transaction' => $transaction,
+            'type'        => $type,
+            'company'     => $user->tenant
+        ]);
+
+        return $pdf->download("comprobante_{$id}.pdf");
+    }
 }
