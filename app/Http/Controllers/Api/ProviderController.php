@@ -124,7 +124,7 @@ class ProviderController extends Controller
                 'account_id'       => null,
                 'currency_id'      => $request->debt_currency_id,
                 'amount'           => $request->debt_amount,
-                'type'             => 'income', // Deuda a favor del proveedor
+                'type'             => 'info', // Deuda a favor del proveedor (Informativo, no suma a caja)
                 'category'         => 'Deuda con Proveedor',
                 'description'      => "{$request->description} (Recibido: {$request->amount_received}, Interés: {$request->interest_percentage}%)",
                 'transaction_date' => $request->transaction_date,
