@@ -46,11 +46,13 @@ class ActivityLogController extends Controller
                 'subject_id' => $activity->subject_id,
                 'causer_name' => $activity->causer ? $activity->causer->name : 'Sistema/Automático',
                 'causer_email' => $activity->causer ? $activity->causer->email : null,
-                // Intentamos obtener el Tenant del usuario que hizo la acción
-                'tenant_name' => $activity->causer && $activity->causer->tenant ? $activity->causer->tenant->name : 'Global/N/A',
+                // Intentamos obtener el Tenant del usuario que hizo la acción de forma segura
+                'tenant_name' => ($activity->causer && $activity->causer->tenant_id && $activity->causer->tenant) 
+                    ? $activity->causer->tenant->name 
+                    : 'Global/N/A',
                 'properties' => $activity->properties, // El JSON con los cambios (old vs attributes)
-                'created_at' => $activity->created_at->format('Y-m-d H:i:s'),
-                'time_ago' => $activity->created_at->diffForHumans(),
+                'created_at' => $activity->created_at ? $activity->created_at->format('Y-m-d H:i:s') : null,
+                'time_ago' => $activity->created_at ? $activity->created_at->diffForHumans() : null,
             ];
         });
 

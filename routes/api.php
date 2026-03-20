@@ -61,6 +61,7 @@ Route::get('tenants/check-status/{tenant}', function ($id) {
 
 Route::post('/webhooks/stripe', [WebhookController::class, 'handleStripe']);
 Route::post('/webhooks/paypal', [WebhookController::class, 'handlePayPal']);
+Route::post('/support/guest', [SupportController::class, 'sendGuestContact']);
 
 
 /*

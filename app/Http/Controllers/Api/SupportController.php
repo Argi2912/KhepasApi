@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 use App\Models\SupportTicket;
+use App\Models\Tenant;
 
 class SupportController extends Controller
 {
@@ -118,6 +119,68 @@ class SupportController extends Controller
         }
 
         return response()->json($message->load('sender:id,name'));
+    }
+
+    /**
+     * Permite a un usuario no registrado enviar una consulta desde el landing page.
+     */
+    public function sendGuestContact(Request $request)
+    {
+        $request->validate([
+            'body' => 'required|string',
+            'contact_info' => 'nullable|string|max:255',
+            'subject' => 'nullable|string|max:100'
+        ]);
+
+        // Buscamos o creamos un "Guest User" o simplemente creamos un ticket sin user_id definido (o uno reservado)
+        // Usaremos un ticket con user_id null o un ID específico para invitados si prefieres.
+        // Aquí crearemos un ticket marcado como 'guest'.
+        
+        $ticket = SupportTicket::create([
+            'user_id' => null, // Opcional: podrías tener un usuario "Invitado" en la DB
+            'tenant_id' => null, 
+            'subject' => ($request->subject ?? 'Consulta de Invitado') . " (" . ($request->contact_info ?? 'Anónimo') . ")",
+            'status' => 'open',
+            'last_message_at' => now()
+        ]);
+
+        $message = SupportMessage::create([
+            'ticket_id' => $ticket->id,
+            'user_id' => null,
+            'sender_id' => null, // NULL indica invitado
+            'tenant_id' => null,
+            'body' => "CONTACTO: " . ($request->contact_info ?? 'No provisto') . "\n\nMENSAJE: " . $request->body,
+            'is_read' => false
+        ]);
+
+        // Notificación opcional (Telegram)
+        $this->notifyTelegramGuest($message, $request->contact_info);
+
+        return response()->json(['message' => 'Mensaje enviado correctamente.']);
+    }
+
+    private function notifyTelegramGuest($message, $contactInfo)
+    {
+        $token = env('TELEGRAM_BOT_TOKEN');
+        $chatId = env('TELEGRAM_CHAT_ID');
+
+        if (!$token || !$chatId) return;
+
+        $text = "🌐 *NUEVA CONSULTA - LANDING PAGE*\n";
+        $text .= "--------------------------------\n";
+        $text .= "👤 *Contacto:* " . ($contactInfo ?? 'Anónimo') . "\n";
+        $text .= "📝 *Mensaje:* {$message->body}\n";
+        $text .= "--------------------------------";
+
+        try {
+            Http::post("https://api.telegram.org/bot{$token}/sendMessage", [
+                'chat_id' => $chatId,
+                'text' => $text,
+                'parse_mode' => 'Markdown'
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Error Telegram Guest: " . $e->getMessage());
+        }
     }
 
     /**
