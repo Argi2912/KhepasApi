@@ -10,12 +10,12 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
+use App\Models\SupportTicket;
+
 class SupportController extends Controller
 {
     /**
-     * Obtener los mensajes del chat.
-     * Si es Super Admin, puede ver todos o por usuario específico.
-     * Si es Tenant User, solo ve los suyos.
+     * Obtener los tickets (hilos de conversación).
      */
     public function index(Request $request)
     {
@@ -23,53 +23,96 @@ class SupportController extends Controller
         if (!$user) return response()->json(['error' => 'No autenticado'], 401);
         $isSuperAdmin = is_null($user->tenant_id);
 
-        $query = SupportMessage::with(['sender:id,name']);
+        $query = SupportTicket::with(['user:id,name']);
 
         if ($isSuperAdmin) {
-            // El Super Admin puede filtrar por un usuario específico (hilo)
             if ($request->has('user_id')) {
                 $query->where('user_id', $request->user_id);
-            } else {
-                // O ver los últimos de todos (resumen)
-                // Aquí podrías agrupar, pero para la campanita traemos los no leídos
-                $query->where('is_read', false);
+            }
+            if ($request->has('status')) {
+                $query->where('status', $request->status);
             }
         } else {
-            // Los usuarios normales solo ven sus hilos
             $query->where('user_id', $user->id);
         }
 
-        return response()->json($query->orderBy('created_at', 'asc')->get());
+        return response()->json($query->orderBy('last_message_at', 'desc')->get());
     }
 
     /**
-     * Enviar un nuevo mensaje de soporte.
+     * Obtener mensajes de un ticket específico.
+     */
+    public function show($id)
+    {
+        $user = auth('api')->user();
+        if (!$user) return response()->json(['error' => 'No autenticado'], 401);
+        $isSuperAdmin = is_null($user->tenant_id);
+
+        $ticket = SupportTicket::findOrFail($id);
+        
+        // Seguridad: Solo el dueño o SuperAdmin ven el ticket
+        if (!$isSuperAdmin && $ticket->user_id !== $user->id) {
+            return response()->json(['error' => 'No autorizado'], 403);
+        }
+
+        $messages = $ticket->messages()->with('sender:id,name')->orderBy('created_at', 'asc')->get();
+        return response()->json([
+            'ticket' => $ticket,
+            'messages' => $messages
+        ]);
+    }
+
+    /**
+     * Enviar un mensaje a un ticket existente o crear uno nuevo.
      */
     public function sendContact(Request $request)
     {
         $request->validate([
             'body' => 'required|string',
             'subject' => 'nullable|string|max:100',
-            'user_id' => 'nullable|exists:users,id' // Solo lo usa el Admin para responder
+            'ticket_id' => 'nullable|exists:support_tickets,id',
+            'user_id' => 'nullable|exists:users,id' // Solo Admin para respuestas
         ]);
 
         $sender = auth('api')->user();
         if (!$sender) return response()->json(['error' => 'No autenticado'], 401);
         $isSuperAdmin = is_null($sender->tenant_id);
 
-        // Si es admin, responde a un usuario. Si es usuario, inicia/sigue su hilo.
-        $targetUserId = ($isSuperAdmin && $request->user_id) ? $request->user_id : $sender->id;
+        $ticketId = $request->ticket_id;
+
+        // Si no hay ticket_id, creamos uno nuevo (solo usuarios finales)
+        if (!$ticketId) {
+            if ($isSuperAdmin) {
+                return response()->json(['error' => 'El administrador no puede iniciar hilos sin un ticket previo'], 400);
+            }
+
+            $ticket = SupportTicket::create([
+                'user_id' => $sender->id,
+                'tenant_id' => $sender->tenant_id,
+                'subject' => $request->subject ?? 'Nueva Consulta',
+                'status' => 'open',
+                'last_message_at' => now()
+            ]);
+            $ticketId = $ticket->id;
+        } else {
+            $ticket = SupportTicket::findOrFail($ticketId);
+            
+            if ($ticket->status === 'closed') {
+                return response()->json(['error' => 'Este ticket está cerrado y no admite más mensajes'], 403);
+            }
+
+            $ticket->update(['last_message_at' => now()]);
+        }
 
         $message = SupportMessage::create([
-            'user_id' => $targetUserId,
+            'ticket_id' => $ticketId,
+            'user_id' => $ticket->user_id,
             'sender_id' => $sender->id,
             'tenant_id' => $sender->tenant_id,
-            'subject' => $request->subject,
             'body' => $request->body,
             'is_read' => false
         ]);
 
-        // Si el mensaje viene de un CLIENTE (no admin), notificamos al Super Admin vía Telegram
         if (!$isSuperAdmin) {
             $this->notifyTelegram($message, $sender);
         }
@@ -78,54 +121,59 @@ class SupportController extends Controller
     }
 
     /**
-     * Marcar mensajes como leídos.
+     * Cerrar un ticket.
+     */
+    public function closeTicket($id)
+    {
+        $user = auth('api')->user();
+        if (!$user) return response()->json(['error' => 'No autenticado'], 401);
+        
+        $ticket = SupportTicket::findOrFail($id);
+        
+        // Por ahora permitimos que ambos (Usuario y Admin) cierren el ticket
+        $ticket->update(['status' => 'closed']);
+
+        return response()->json(['message' => 'Ticket cerrado exitosamente', 'ticket' => $ticket]);
+    }
+
+    /**
+     * Marcar mensajes de un ticket como leídos.
      */
     public function markAsRead(Request $request)
     {
         $user = auth('api')->user();
         if (!$user) return response()->json(['error' => 'No autenticado'], 401);
-        $isSuperAdmin = is_null($user->tenant_id);
+        
+        $request->validate(['ticket_id' => 'required|exists:support_tickets,id']);
 
-        $query = SupportMessage::where('is_read', false);
-
-        if ($isSuperAdmin) {
-            if ($request->has('user_id')) {
-                $query->where('user_id', $request->user_id)->where('sender_id', '!=', $user->id);
-            }
-        } else {
-            $query->where('user_id', $user->id)->where('sender_id', '!=', $user->id);
-        }
-
-        $query->update(['is_read' => true]);
+        SupportMessage::where('ticket_id', $request->ticket_id)
+            ->where('is_read', false)
+            ->where('sender_id', '!=', $user->id)
+            ->update(['is_read' => true]);
 
         return response()->json(['message' => 'Actualizado']);
     }
 
     /**
-     * Obtener lista de hilos (usuarios) con mensajes pendientes.
-     * Solo para Super Admin.
+     * Obtener hilos pendientes (solo Super Admin).
      */
     public function pendingThreads()
     {
         $user = auth('api')->user();
-        if (!$user || !is_null($user->tenant_id)) {
-            return response()->json([]);
-        }
+        if (!$user || !is_null($user->tenant_id)) return response()->json([]);
 
-        // Obtenemos los usuarios que tienen mensajes no leídos enviados por ellos
-        $threads = SupportMessage::where('is_read', false)
-            ->where('sender_id', '!=', $user->id)
-            ->with('sender:id,name')
-            ->select('user_id', \DB::raw('count(*) as count'), \DB::raw('max(created_at) as last_message_at'))
-            ->groupBy('user_id')
+        $threads = SupportTicket::where('status', 'open')
+            ->whereHas('messages', function($q) use ($user) {
+                $q->where('is_read', false)->where('sender_id', '!=', $user->id);
+            })
+            ->with(['user', 'messages' => function($q) {
+                $q->orderBy('created_at', 'desc')->limit(1);
+            }])
             ->get();
 
         return response()->json($threads);
     }
 
-    /**
-     * Obtener conteo total de mensajes no leídos (badge).
-     */
     public function pendingCount()
     {
         $user = auth('api')->user();
@@ -133,32 +181,28 @@ class SupportController extends Controller
 
         $count = SupportMessage::where('is_read', false)
             ->where('sender_id', '!=', $user->id)
+            ->whereHas('ticket', function($q) {
+                $q->where('status', 'open');
+            })
             ->count();
 
         return response()->json(['count' => $count]);
     }
 
-    /**
-     * Enviar notificación a Telegram.
-     */
     private function notifyTelegram($message, $sender)
     {
         $token = env('TELEGRAM_BOT_TOKEN');
-        $chatId = env('TELEGRAM_ADMIN_CHAT_ID');
+        $chatId = env('TELEGRAM_CHAT_ID'); // Cambiado a variable general según .env previo
 
-        if (!$token || !$chatId) {
-            Log::warning("Telegram no configurado. Token o ChatID faltantes.");
-            return;
-        }
+        if (!$token || !$chatId) return;
 
         $tenantName = $sender->tenant ? $sender->tenant->name : 'N/A';
-        $text = "🚀 *NUEVO MENSAJE DE SOPORTE*\n";
+        $text = "🎫 *TICKET #{$message->ticket_id}*\n";
         $text .= "--------------------------------\n";
         $text .= "👤 *Usuario:* {$sender->name}\n";
         $text .= "🏢 *Empresa:* {$tenantName}\n";
         $text .= "📝 *Mensaje:* {$message->body}\n";
-        $text .= "--------------------------------\n";
-        $text .= "_Inicia sesión para responder_";
+        $text .= "--------------------------------";
 
         try {
             Http::post("https://api.telegram.org/bot{$token}/sendMessage", [
@@ -167,7 +211,7 @@ class SupportController extends Controller
                 'parse_mode' => 'Markdown'
             ]);
         } catch (\Exception $e) {
-            Log::error("Error enviando a Telegram: " . $e->getMessage());
+            Log::error("Error Telegram: " . $e->getMessage());
         }
     }
 }

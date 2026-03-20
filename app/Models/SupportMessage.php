@@ -10,6 +10,7 @@ class SupportMessage extends Model
     use HasFactory;
 
     protected $fillable = [
+        'ticket_id',
         'user_id',
         'sender_id',
         'tenant_id',
@@ -21,6 +22,11 @@ class SupportMessage extends Model
     protected $casts = [
         'is_read' => 'boolean',
     ];
+
+    public function ticket()
+    {
+        return $this->belongsTo(SupportTicket::class, 'ticket_id');
+    }
 
     /**
      * El usuario dueño del ticket (el cliente).
