@@ -53,7 +53,6 @@ use App\Http\Controllers\Api\SupportController;
 
 Route::post('login', [AuthController::class, 'login']);
 Route::post('/register', [RegisterController::class, 'register']);
-Route::post('/support/contact', [SupportController::class, 'sendContact']); // 👈 Ponla aquí
 
 Route::get('tenants/check-status/{tenant}', function ($id) {
     $tenant = \App\Models\Tenant::find($id);
@@ -97,11 +96,17 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::post('logout', [AuthController::class, 'logout']);
     Route::get('me', [AuthController::class, 'me']);
     Route::post('refresh', [AuthController::class, 'refresh']);
+ 
+    // --- RUTAS DE SOPORTE Y CHAT ---
+    Route::get('/support/contact', [SupportController::class, 'index']);
+    Route::post('/support/contact', [SupportController::class, 'sendContact']);
+    Route::post('/support/mark-read', [SupportController::class, 'markAsRead']);
+    Route::get('/support/pending-count', [SupportController::class, 'pendingCount']);
+    Route::get('/support/pending-threads', [SupportController::class, 'pendingThreads']);
 
-    // --- RUTAS DE PAGO DE SUSCRIPCIÓN (NUEVO) ---
+    // --- RUTAS DE PAGO DE SUSCRIPCIÓN ---
     Route::post('/subscription/paypal', [SubscriptionController::class, 'payWithPaypal']);
     Route::post('/subscription/capture-registration', [SubscriptionController::class, 'captureRegistrationPayment']);
-    Route::post('/support/contact', [App\Http\Controllers\Api\SupportController::class, 'sendContact']);
 });
 
 

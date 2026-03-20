@@ -19,6 +19,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Bypass de permisos para Super Admin (usuarios sin tenant_id)
+        \Illuminate\Support\Facades\Gate::before(function ($user, $ability) {
+            return $user->tenant_id === null ? true : null;
+        });
     }
 }

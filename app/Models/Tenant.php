@@ -20,7 +20,7 @@ class Tenant extends Model
         'external_payment_id',
         'binance_merchant_trade_no',
         'binance_prepay_id',
-        
+        'subscription_ends_at',
     ];
 
     /**
@@ -28,6 +28,7 @@ class Tenant extends Model
      */
     protected $casts = [
         'is_active' => 'boolean',
+        'subscription_ends_at' => 'datetime',
     ];
 
     /**

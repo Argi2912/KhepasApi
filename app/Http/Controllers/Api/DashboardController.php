@@ -6,27 +6,31 @@ use App\Http\Controllers\Controller;
 use App\Models\Account;
 use App\Models\LedgerEntry;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Auth;
 
 class DashboardController extends Controller
 {
     public function getSummary()
     {
+        $tenantId = Auth::user()->tenant_id;
+
         // 1. Obtener CAJA (Agrupado por moneda)
-        // Usamos pluck para obtener un array tipo ['USD' => 100, 'VES' => 5000]
-        $caja = Account::select('currency_code', DB::raw('SUM(balance) as total'))
+        $caja = Account::where('tenant_id', $tenantId)
+            ->select('currency_code', DB::raw('SUM(balance) as total'))
             ->groupBy('currency_code')
             ->pluck('total', 'currency_code');
 
-        // 2. Obtener DEUDAS (Pasivos) agrupadas por moneda
-        // Filtramos solo lo pendiente y agrupamos por moneda para no mezclar divisas
-        $por_pagar = LedgerEntry::where('type', 'payable')
+        // 2. Obtener DEUDAS (Pasivos)
+        $por_pagar = LedgerEntry::where('tenant_id', $tenantId)
+            ->where('type', 'payable')
             ->whereIn('status', ['pending', 'partially_paid'])
             ->select('currency_code', DB::raw('SUM(amount - paid_amount) as total'))
             ->groupBy('currency_code')
             ->pluck('total', 'currency_code');
 
-        // 3. Obtener CUENTAS POR COBRAR (Activos) agrupadas por moneda
-        $por_cobrar = LedgerEntry::where('type', 'receivable')
+        // 3. Obtener CUENTAS POR COBRAR (Activos)
+        $por_cobrar = LedgerEntry::where('tenant_id', $tenantId)
+            ->where('type', 'receivable')
             ->whereIn('status', ['pending', 'partially_paid'])
             ->select('currency_code', DB::raw('SUM(amount - paid_amount) as total'))
             ->groupBy('currency_code')
@@ -62,7 +66,8 @@ class DashboardController extends Controller
             }
         }
 
-        $accounts_breakdown = Account::select('name as bank_name', 'currency_code', 'balance')
+        $accounts_breakdown = Account::where('tenant_id', $tenantId)
+            ->select('name as bank_name', 'currency_code', 'balance')
             ->orderBy('currency_code')
             ->get();
 
