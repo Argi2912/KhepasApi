@@ -13,8 +13,8 @@ return new class extends Migration
     {
         Schema::create('support_messages', function (Blueprint $row) {
             $row->id();
-            $row->foreignId('user_id')->constrained('users')->onDelete('cascade'); // El usuario que inició el ticket
-            $row->foreignId('sender_id')->constrained('users')->onDelete('cascade'); // El que escribe el mensaje actual
+            $row->foreignId('user_id')->nullable()->constrained('users')->onDelete('cascade'); // El usuario que inició el ticket
+            $row->foreignId('sender_id')->nullable()->constrained('users')->onDelete('cascade'); // El que escribe el mensaje actual
             $row->foreignId('tenant_id')->nullable()->constrained('tenants')->onDelete('cascade');
             $row->string('subject')->nullable();
             $row->text('body');
