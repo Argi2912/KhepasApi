@@ -99,7 +99,9 @@ Route::group(['middleware' => ['auth:api']], function () {
  
     // --- RUTAS DE SOPORTE Y CHAT ---
     Route::get('/support/contact', [SupportController::class, 'index']);
+    Route::get('/support/contact/{id}', [SupportController::class, 'show']);
     Route::post('/support/contact', [SupportController::class, 'sendContact']);
+    Route::post('/support/contact/{id}/close', [SupportController::class, 'closeTicket']);
     Route::post('/support/mark-read', [SupportController::class, 'markAsRead']);
     Route::get('/support/pending-count', [SupportController::class, 'pendingCount']);
     Route::get('/support/pending-threads', [SupportController::class, 'pendingThreads']);
