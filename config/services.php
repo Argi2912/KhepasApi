@@ -42,10 +42,9 @@ return [
     ],
 
     'paypal' => [
-        'mode'      => env('PAYPAL_MODE', 'live'), // Por defecto live
-        'client_id' => env('PAYPAL_LIVE_CLIENT_ID'), // Tu variable específica
-        'secret'    => env('PAYPAL_LIVE_CLIENT_SECRET'), // Tu variable específica
-        'app_id'    => env('PAYPAL_LIVE_APP_ID'),
-        'currency'  => env('PAYPAL_CURRENCY', 'USD'),
+        'client_id' => env('PAYPAL_CLIENT_ID'),
+        'client_secret' => env('PAYPAL_CLIENT_SECRET'),
+        'mode' => env('PAYPAL_MODE', 'sandbox'),
     ],
+
 ];

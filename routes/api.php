@@ -97,7 +97,7 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::post('logout', [AuthController::class, 'logout']);
     Route::get('me', [AuthController::class, 'me']);
     Route::post('refresh', [AuthController::class, 'refresh']);
- 
+
     // --- RUTAS DE SOPORTE Y CHAT ---
     Route::get('/support/contact', [SupportController::class, 'index']);
     Route::get('/support/contact/{id}', [SupportController::class, 'show']);
@@ -108,8 +108,8 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::get('/support/pending-threads', [SupportController::class, 'pendingThreads']);
 
     // --- RUTAS DE PAGO DE SUSCRIPCIÓN ---
-    Route::post('/subscription/paypal', [SubscriptionController::class, 'payWithPaypal']);
-    Route::post('/subscription/capture-registration', [SubscriptionController::class, 'captureRegistrationPayment']);
+    Route::post('/subscription/paypal/create-order', [SubscriptionController::class, 'createPayPalOrder']);
+    Route::post('/subscription/paypal/capture-order', [SubscriptionController::class, 'capturePayPalOrder']);
 });
 
 
