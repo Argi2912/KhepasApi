@@ -59,8 +59,9 @@ class RegisterController extends Controller
                 'tenant_id' => $tenant->id,
                 'name'      => $request->admin_name,
                 'email'     => $request->admin_email,
-                'password'  => Hash::make($request->password),
+                'password'  => $request->password, // El modelo User se encarga del hasheo
                 'role'      => 'admin',
+                'is_active' => true,
             ]);
 
             $user->assignRole('admin_tenant');

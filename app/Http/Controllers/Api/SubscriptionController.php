@@ -7,7 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use App\Models\Tenant; // <--- AGREGAR ESTA IMPORTACIÓN
+use App\Models\Tenant;
 
 class SubscriptionController extends Controller
 {

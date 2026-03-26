@@ -30,12 +30,6 @@ class User extends Authenticatable implements JWTSubject
         'is_active', // <--- AGREGAR ESTO
     ];
 
-    protected $casts = [
-        'email_verified_at' => 'datetime',
-        'password' => 'hashed',
-        'is_active' => 'boolean', // <--- RECOMENDADO: Asegura que siempre sea true/false
-    ];
-
     /**
      * The attributes that should be hidden for serialization.
      *
@@ -56,6 +50,7 @@ class User extends Authenticatable implements JWTSubject
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_active' => 'boolean',
         ];
     }
 
