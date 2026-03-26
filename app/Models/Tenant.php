@@ -16,11 +16,10 @@ class Tenant extends Model
         'is_active',
         'plan_name',
         'plan_price',
-        'payment_method',
+        'last_payment_at',
+        'expires_at',
+        'paypal_order_id',
         'external_payment_id',
-        'binance_merchant_trade_no',
-        'binance_prepay_id',
-        'subscription_ends_at',
     ];
 
     /**
@@ -28,7 +27,9 @@ class Tenant extends Model
      */
     protected $casts = [
         'is_active' => 'boolean',
-        'subscription_ends_at' => 'datetime',
+        'last_payment_at' => 'datetime',
+        'expires_at' => 'datetime',
+        'plan_price' => 'decimal:2',
     ];
 
     /**

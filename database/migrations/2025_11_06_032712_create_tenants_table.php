@@ -13,9 +13,19 @@ return new class extends Migration
     {
         Schema::create('tenants', function (Blueprint $table) {
             $table->id();
-            $table->string('name');               // Ej: "Estudio Kephas"
-            $table->string('domain')->nullable(); // Para futuro: kephas.tuconpay.com
-            $table->boolean('is_active')->default(true);
+            $table->string('name');
+            $table->boolean('is_active')->default(false); // Cambiado a false por defecto hasta que paguen
+
+            // Campos para suscripción (Nuevos)
+            $table->string('plan_name')->nullable();
+            $table->decimal('plan_price', 8, 2)->default(0);
+            $table->timestamp('last_payment_at')->nullable();
+            $table->timestamp('expires_at')->nullable();
+            $table->string('paypal_order_id')->nullable(); // Para rastrear el pago actual
+
+            // Campos para otros métodos (Binance/Stripe)
+            $table->string('external_payment_id')->nullable();
+
             $table->timestamps();
         });
     }

@@ -16,19 +16,29 @@ class SubscriptionController extends Controller
     private $clientSecret;
     public function __construct()
     {
-        $this->clientId = config('services.paypal.client_id');
-        $this->clientSecret = config('services.paypal.client_secret');
-        $this->baseUrl = config('services.paypal.mode') === 'live'
-            ? 'https://api-m.paypal.com'
-            : 'https://api-m.sandbox.paypal.com';
+        $mode = trim(config('services.paypal.mode', 'sandbox'));
+
+        if ($mode === 'sandbox') {
+            // Usa las credenciales exclusivas de Sandbox
+            $this->clientId = config('paypal.sandbox.client_id');
+            $this->clientSecret = config('paypal.sandbox.client_secret');
+            $this->baseUrl = 'https://api-m.sandbox.paypal.com';
+        } else {
+            // Usa las credenciales de Producción
+            $this->clientId = config('services.paypal.client_id');
+            $this->clientSecret = config('services.paypal.client_secret');
+            $this->baseUrl = 'https://api-m.paypal.com';
+        }
     }
 
     public function createPayPalOrder(Request $request)
     {
         $request->validate([
-            'plan' => 'required|string',
-            'amount' => 'required|numeric'
+            'plan' => 'required|string|in:normal,pro'
         ]);
+
+        $amount = $request->plan === 'normal' ? 47.00 : 300.00;
+
         $accessToken = $this->getAccessToken();
         $response = Http::withToken($accessToken)
             ->post("{$this->baseUrl}/v2/checkout/orders", [
@@ -37,7 +47,7 @@ class SubscriptionController extends Controller
                     'description' => "Plan " . strtoupper($request->plan),
                     'amount' => [
                         'currency_code' => 'USD',
-                        'value' => number_format($request->amount, 2, '.', '')
+                        'value' => number_format($amount, 2, '.', '')
                     ]
                 ]]
             ]);
@@ -48,27 +58,63 @@ class SubscriptionController extends Controller
      */
     public function capturePayPalOrder(Request $request)
     {
-        $request->validate(['orderID' => 'required|string']);
+        $request->validate([
+            'orderID' => 'required|string',
+            'plan' => 'required|string|in:normal,pro'
+        ]);
+
         $accessToken = $this->getAccessToken();
         $orderId = $request->orderID;
         $response = Http::withToken($accessToken)
+            ->withHeaders([
+                'Content-Type' => 'application/json',
+                'Prefer' => 'return=representation' // Opcional: ayuda a traer más info si falla
+            ])
+            ->withBody('{}', 'application/json') // <--- SOLUCIÓN: Forzamos un objeto JSON vacío literal
             ->post("{$this->baseUrl}/v2/checkout/orders/{$orderId}/capture");
+
         if ($response->successful() && $response->json('status') === 'COMPLETED') {
-            // LÓGICA DE NEGOCIO:
-            // 1. Obtener el tenant (usuario autenticado)
-            // 2. Activar suscripción y actualizar fecha de vencimiento
             $user = $request->user();
             $tenant = $user->tenant;
 
+            $isPro = $request->plan === 'pro';
+            $monthsToAdd = $isPro ? 13 : 1;
+
             $tenant->update([
                 'is_active' => true,
+                'plan_name' => $request->plan,
+                'plan_price' => $isPro ? 300.00 : 47.00,
                 'last_payment_at' => now(),
-                'expires_at' => now()->addMonth(), // O según el plan
+                'expires_at' => now()->addMonths($monthsToAdd),
                 'paypal_order_id' => $orderId
             ]);
+
             return response()->json(['status' => 'success', 'message' => 'Suscripción activada']);
         }
-        return response()->json(['status' => 'error', 'message' => 'No se pudo completar el pago'], 400);
+        return response()->json([
+            'status' => 'error',
+            'message' => 'No se pudo completar el pago',
+            'paypal_debug' => $response->json(), // Esto te dirá el error real (ej: ORDER_NOT_APPROVED)
+            'http_code' => $response->status()
+        ], 400);
+    }
+
+    /**
+     * Activar el plan gratuito (1 mes) directamente sin PayPal
+     */
+    public function activateFreePlan(Request $request)
+    {
+        $user = $request->user();
+        $tenant = $user->tenant;
+
+        $tenant->update([
+            'is_active' => true,
+            'last_payment_at' => now(),
+            'expires_at' => now()->addMonth(), // 1 mes para el plan gratuito
+            'paypal_order_id' => 'free_' . uniqid()
+        ]);
+
+        return response()->json(['status' => 'success', 'message' => 'Plan gratuito activado']);
     }
     /**
      * Obtener Token de Acceso OAuth2

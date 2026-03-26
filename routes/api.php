@@ -108,6 +108,7 @@ Route::group(['middleware' => ['auth:api']], function () {
     Route::get('/support/pending-threads', [SupportController::class, 'pendingThreads']);
 
     // --- RUTAS DE PAGO DE SUSCRIPCIÓN ---
+    Route::post('/subscription/free', [SubscriptionController::class, 'activateFreePlan']);
     Route::post('/subscription/paypal/create-order', [SubscriptionController::class, 'createPayPalOrder']);
     Route::post('/subscription/paypal/capture-order', [SubscriptionController::class, 'capturePayPalOrder']);
 });
