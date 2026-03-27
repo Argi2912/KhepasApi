@@ -25,8 +25,8 @@ class SubscriptionController extends Controller
             $this->baseUrl = 'https://api-m.sandbox.paypal.com';
         } else {
             // Usa las credenciales de Producción
-            $this->clientId = config('services.paypal.client_id');
-            $this->clientSecret = config('services.paypal.client_secret');
+            $this->clientId = config('paypal.live.client_id');
+            $this->clientSecret = config('paypal.live.client_secret');
             $this->baseUrl = 'https://api-m.paypal.com';
         }
     }
